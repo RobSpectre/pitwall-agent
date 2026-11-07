@@ -116,7 +116,7 @@ pitwall/
   plugin.py          register(): tools, /pitwall, skills
   fixtures.py        fixture generator
 skills/qualifying-session/SKILL.md
-tests/               61 tests
+tests/               63 tests
 ```
 
 ## Tests

@@ -104,6 +104,9 @@ PIA  P4   lap 15   S1 19.475 (-0.021)  S2 --  S3 --  proj 1:09.982 (+0.106) vs p
   "on for a 1:09.8", never "has done a 1:09.8".
 - Where `proj` versus pole is **negative**, the car is on for pole. That is the
   line to say out loud.
+- `proj -  (no clean reference lap)` means the driver's best sectors came from
+  an outlap or a lap with a stop, so no projection is honest. Say he is on a
+  flyer without quoting a time.
 - An empty list plus `next out: RUS, ALO` means the track is between runs;
   the next flyer is one outlap away (roughly 105 % of a lap time).
 

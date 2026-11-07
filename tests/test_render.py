@@ -65,6 +65,25 @@ def test_flying_empty_state_is_a_sentence(q3):
     assert "none." in text
 
 
+def test_projection_is_dropped_when_the_reference_lap_is_junk(q3):
+    # A car whose "best sectors" came from an out-lap must not get a projection.
+    slow = q3.by_num["16"]
+    slow.proj = (q3.pole or 0) + 12.0
+    text = render.flying(q3)
+    assert "proj -  (no clean reference lap)" in text
+    assert "1:2" not in text.split("proj -")[1][:12]
+
+
+def test_driver_in_the_pits_reports_last_lap_sectors_without_deltas(q3):
+    ver = q3.by_num["3"]
+    ver.sectors[0].t = 34.284
+    ver.sectors[1].t = 61.038
+    ver.sectors[2].t = 26.405
+    text = render.driver_detail(q3, ver)
+    assert "last lap S1 34.284" in text
+    assert "+" not in text.split("last lap")[1].split("speeds")[0]
+
+
 def test_purple_reports_holder_and_live_lap(q3):
     text = render.purple(q3)
     assert "S2 34.373 LEC" in text

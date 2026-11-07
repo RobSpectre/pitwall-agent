@@ -36,9 +36,13 @@ def _client():
         try:
             from mvf1 import MultiViewerForF1
         except ImportError as exc:  # pragma: no cover - depends on the host env
+            # Report the real cause: an ImportError raised *inside* mvf1 (a
+            # missing transitive dependency) reads nothing like "not installed".
             raise PitwallError(
-                "mvf1 is not installed in Hermes's Python environment. "
-                "Run: hermes plugins install-deps pitwall"
+                f"cannot import mvf1 in this process ({exc}). Install the plugin with "
+                "`hermes plugins install <owner>/hermes-pitwall --yes-deps`, then restart "
+                "the gateway (`hermes gateway restart`) so the new dependency environment "
+                "is used — a running process never switches environments."
             ) from exc
         uri = os.environ.get("MVF1_URI") or DEFAULT_URI
         _CLIENT = MultiViewerForF1(uri=uri)

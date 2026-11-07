@@ -51,6 +51,22 @@ def _sector_letters(driver: Driver) -> str:
     return " ".join(s.letter for s in driver.sectors)
 
 
+#: A projection built on a car's best sectors is meaningless when those sectors
+#: came from an out-lap or a lap with a stop. Anything this far off pole is noise.
+PROJECTION_WINDOW = 3.0
+
+
+def _projection(driver: Driver, session: Session) -> float | None:
+    if not driver.proj or not session.pole:
+        return driver.proj
+    return driver.proj if driver.proj - session.pole <= PROJECTION_WINDOW else None
+
+
+def _sector_phase(driver: Driver) -> str:
+    """Sector values describe the live lap only while the car is running one."""
+    return "now" if driver.run in {"PUSH", "BUILD", "COOL"} else "last lap"
+
+
 def _flags(driver: Driver, session: Session) -> str:
     marks = []
     if driver.knocked_out:
@@ -119,7 +135,7 @@ def board(session: Session, *, limit: int = 25, gap_tol: float | None = None) ->
 
 def flying(session: Session, *, limit: int = 8) -> str:
     """Who is on a flyer right now, with per-sector deltas and a projected lap."""
-    flyers = sorted(session.flyers(), key=lambda d: (d.proj or 999.0))[:limit]
+    flyers = sorted(session.flyers(), key=lambda d: (_projection(d, session) or 999.0))[:limit]
     head = f"ON A FLYER NOW ({len(session.flyers())})  {fmt_clock(session.remaining)} LEFT{_age(session)}"
 
     if not flyers:
@@ -136,9 +152,12 @@ def flying(session: Session, *, limit: int = 8) -> str:
                 continue
             delta = sector.t - driver.sector_pb[i] if driver.sector_pb[i] else None
             pieces.append(f"S{i + 1} {fmt_sector(sector.t)}" + (f" ({fmt_gap(delta)})" if delta is not None else ""))
-        if driver.proj:
-            vs_pole = f" ({fmt_gap(driver.proj - session.pole)})" if session.pole else ""
-            pieces.append(f"proj {fmt_lap(driver.proj)}{vs_pole} vs pole")
+        proj = _projection(driver, session)
+        if proj:
+            vs_pole = f" ({fmt_gap(proj - session.pole)})" if session.pole else ""
+            pieces.append(f"proj {fmt_lap(proj)}{vs_pole} vs pole")
+        else:
+            pieces.append("proj -  (no clean reference lap)")
         lines.append("  ".join(pieces))
     return "\n".join(lines)
 
@@ -166,7 +185,7 @@ def purple(session: Session, *, recent: int = 6) -> str:
     if live:
         rows = [
             f"{driver.label} " + " ".join(f"S{i + 1} {fmt_sector(s.t)}" for i, s in held)
-            + f" ({driver.run.lower()})"
+            + f" ({'just completed' if driver.run == 'LAP' else driver.run.lower()})"
             for driver, held in live[:recent]
         ]
         lines.append("purple on the live lap: " + "; ".join(rows))
@@ -215,12 +234,15 @@ def pole(session: Session, *, tol: float = 0.25, limit: int = 10) -> str:
     if not shown:
         lines.append("none inside the window.")
 
-    flyers = [d for d in session.flyers() if d.proj]
+    flyers = [(d, _projection(d, session)) for d in session.flyers()]
+    flyers = [(d, p) for d, p in flyers if p]
     if flyers:
-        flyers.sort(key=lambda d: d.proj)
+        flyers.sort(key=lambda item: item[1])
         lines.append(
             "on a flyer now: "
-            + "; ".join(f"{d.label} proj {fmt_lap(d.proj)} ({fmt_gap(d.proj - session.pole)})" for d in flyers[:5])
+            + "; ".join(
+                f"{d.label} proj {fmt_lap(p)} ({fmt_gap(p - session.pole)})" for d, p in flyers[:5]
+            )
         )
 
     lap_ref = session.lap_time_ref
@@ -250,14 +272,17 @@ def driver_detail(session: Session, driver: Driver) -> str:
         f"sector PB {fmt_sector(driver.sector_pb[0])} {fmt_sector(driver.sector_pb[1])} "
         f"{fmt_sector(driver.sector_pb[2])}  theo {fmt_lap(driver.theo)}",
     ]
+    phase = _sector_phase(driver)
     now = []
     for i, sector in enumerate(driver.sectors):
         if sector.t is None:
             now.append(f"S{i + 1} --")
-        else:
-            delta = sector.t - driver.sector_pb[i] if driver.sector_pb[i] else None
-            now.append(f"S{i + 1} {fmt_sector(sector.t)}" + (f" ({fmt_gap(delta)})" if delta is not None else ""))
-    lines.append("now " + "  ".join(now))
+            continue
+        delta = None
+        if phase == "now" and driver.sector_pb[i]:
+            delta = sector.t - driver.sector_pb[i]
+        now.append(f"S{i + 1} {fmt_sector(sector.t)}" + (f" ({fmt_gap(delta)})" if delta is not None else ""))
+    lines.append(f"{phase} " + "  ".join(now))
     speeds = " ".join(f"{k} {v:.0f}" if v else f"{k} -" for k, v in driver.speeds.items())
     if speeds:
         lines.append("speeds " + speeds)
