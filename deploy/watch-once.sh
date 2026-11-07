@@ -27,4 +27,4 @@ fi
 [ -n "$PY" ] || exit 0
 
 exec env -u PYTHONPATH PYTHONPATH="$PLUGIN" "$PY" -m pitwall.cli watch --once \
-  --notify --log "$LOG"
+  --react --notify --log "$LOG"

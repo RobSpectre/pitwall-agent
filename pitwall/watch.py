@@ -244,11 +244,32 @@ def detect(session: Session, previous: dict) -> tuple[list[Event], dict]:
     return events, new_state
 
 
-def scan(*, path: Path | None = None) -> list[Event]:
-    """One detection pass against the live feed. Empty when nothing is new."""
+def scan(*, path: Path | None = None, react: bool = False) -> list[Event]:
+    """One detection pass against the live feed. Empty when nothing is new.
+
+    ``react`` opts into the side effect: on a flag, frame the stopped car and
+    rewind it; on green, give the screen back. Off by default, because a
+    read-only pass must never move an operator's output.
+    """
     path = path or state_path()
     session, _ = feed.snapshot(fresh=True)
-    events, state = detect(session, _load(path))
+    previous = _load(path)
+    events, state = detect(session, previous)
+
+    marker = previous.get("incident") or {}
+    if react:
+        from . import incident
+
+        if incident.is_flag(session):
+            line, marker = incident.react(session, marker)
+            if line:
+                events.append(Event(HIGH, line, _sig("incident", session.key, session.track, line)))
+        elif marker.get("player"):
+            line = incident.restore(int(marker["player"]))
+            events.append(Event(MEDIUM, line, _sig("restore", marker["player"], session.key)))
+            marker = {}
+    state["incident"] = marker
+
     _save(path, state)
     return events
 

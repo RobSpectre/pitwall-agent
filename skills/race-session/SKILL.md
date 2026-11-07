@@ -114,6 +114,16 @@ Track status is the first line of every output. When it is not green:
 - **Red** — the classification stands as it is; report positions as provisional
   and go to the incident.
 
+**The watchdog already does the first move for you.** On a flag it ranks the
+cars that are not running (off track, then `Stopped`, then coordinates that have
+not moved), syncs the output to the world feed if it has drifted, full-screens
+the best candidate's onboard and seeks back 30 s. Check
+`pitwall-agent watch --recent 5` for the line it logged — it names the driver,
+the player and whether it had to re-sync. If it says
+`live stream: MultiViewer refuses to rewind`, the onboard is up but the stream
+cannot be walked back through the API; scrub in the app instead, and say on air
+that you are going to the replay.
+
 Penalties arrive as race-control messages ("CAR 63 (RUS) 5 SECOND TIME PENALTY
 - TRACK LIMITS"). They are **not** applied to `pitwall_race` until the stewards
 execute them. Whenever one is live, the position is provisional — say

@@ -82,7 +82,7 @@ def _watch(args) -> int:
             print(line)
         return 0
 
-    events = watcher.scan()
+    events = watcher.scan(react=args.react)
     keep = [e for e in events if LEVELS[e.level] <= LEVELS[args.min_level]]
     if not keep:
         return 0
@@ -97,6 +97,31 @@ def _watch(args) -> int:
         _notify(keep)
     return 0
 
+
+
+def _incident(args) -> int:
+    """Manual version of what the watcher does on its own."""
+    from . import incident
+
+    session, _ = feed.snapshot()
+    if not incident.is_flag(session):
+        print(f"no flag active (track: {session.track})")
+        return 0
+
+    found = incident.candidates(session)
+    if not found:
+        print("flag active, but no car is stopped on track in the feed")
+        return 0
+
+    driver = found[0]
+    if args.dry_run:
+        names = ", ".join(f"{d.label} (P{d.position or '-'})" for d in found[:4])
+        print(f"would frame {driver.label} and rewind {args.back}s; candidates: {names}")
+        return 0
+
+    report, _player_id = incident.frame(driver, back=args.back)
+    print(report)
+    return 0
 
 
 def _handler(name: str):
@@ -186,6 +211,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--recent", type=int, metavar="N", help="print the last N logged events instead")
     p.add_argument("--log", default=None, help="event log path (default ~/.hermes/state/pitwall-events.log)")
     p.add_argument("--min-level", choices=["CRIT", "HIGH", "MED"], default="MED")
+    p.add_argument(
+        "--react",
+        action="store_true",
+        help="on a flag: full-screen the stopped car's onboard and rewind it; on green: restore",
+    )
+
+    p = sub.add_parser("incident", help="frame the stopped car now, manually")
+    p.add_argument("--back", type=int, default=30, help="seconds to rewind (default 30)")
+    p.add_argument("--dry-run", action="store_true", help="say what would be framed, touch nothing")
 
     args = parser.parse_args(argv)
     if not args.command:
@@ -202,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "watch":
             return _watch(args)
+        if args.command == "incident":
+            return _incident(args)
         if args.command == "overview":
             return _out(_handler("pitwall_overview")({"messages": args.messages}))
         if args.command == "board":

@@ -189,6 +189,40 @@ instead of hard-coding a venv path, and exits quietly when MultiViewer is
 closed. `hermes`'s own cron ticks once a minute, which is why the 20-second
 cadence runs on a systemd timer.
 
+## Incident reaction
+
+On a yellow or red flag the watchdog can act by itself — `watch --once --react`,
+which the systemd launcher passes:
+
+1. rank the cars that are not running: `Position` status `OffTrack` first, then
+   MultiViewer's decoded `Stopped`, then coordinates unchanged between two
+   position frames;
+2. skip anything in the pit lane or retired — a car in the garage is not the
+   incident;
+3. sync the output to the world feed if it has drifted more than a second. A
+   full-screen onboard two seconds behind the commentary is worse than no
+   onboard — on a live check the driver windows sat 2.2 s behind
+   `INTERNATIONAL`;
+4. full-screen that driver's onboard, reusing a player that already shows him
+   or creating one;
+5. seek back 30 s, so the cause is on screen instead of the aftermath;
+6. when the track goes green, release full screen and return the player to live.
+
+Sync works on live players (`playerSync` is accepted); only the seek is
+refused.
+
+Latency is the timer interval: at most 20 s from the flag appearing in the
+feed. Run it by hand with `pitwall-agent incident --dry-run` to see the
+ranking without touching a player.
+
+**The rewind only works off the live edge.** MultiViewer answers
+`playerSeekTo` with `Cannot seek in live mode` for a player on the live stream,
+and its API has no mutation to leave live mode — pausing does not release it
+either. The routine then reports
+`(live stream: MultiViewer refuses to rewind, onboard only)` and leaves the
+onboard full screen, which is still the useful half of the request. On an
+archive or replay session the seek lands and the 30 s rewind happens.
+
 ## Layout
 
 ```
@@ -212,7 +246,7 @@ skills/
   practice-session/
   qualifying-session/
   race-session/
-tests/               117 tests
+tests/               137 tests
 ```
 
 ## Tests

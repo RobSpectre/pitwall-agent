@@ -126,6 +126,8 @@ class Driver:
     never_started: bool = False
     theo_sectors: tuple[float | None, ...] = ()
     pit_time: float | None = None
+    off_track: bool = False      # Position status OffTrack
+    stationary: bool = False     # identical coordinates in the last two frames
 
     # derived
     run: str = "NONE"
@@ -455,6 +457,24 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
         for num, entry in (((state.get("PitLaneTimeCollection") or {}).get("PitTimes")) or {}).items()
     }
 
+    # Position frames: status ("OnTrack"/"OffTrack") plus X/Y. Two frames that
+    # agree exactly on coordinates mean the car has not moved at all -- the
+    # most reliable "stopped" signal in the feed, independent of any flag.
+    frames = (((state.get("Position") or {}).get("Position")) or [])
+    latest = (frames[-1].get("Entries") or {}) if frames else {}
+    earlier = (frames[-2].get("Entries") or {}) if len(frames) > 1 else {}
+
+    def _moved(num: str) -> bool:
+        now = latest.get(num) or {}
+        before = earlier.get(num) or {}
+        if not before:
+            return True
+        here = (now.get("X"), now.get("Y"))
+        there = (before.get("X"), before.get("Y"))
+        if here in ((0, 0), (None, None)) or there in ((0, 0), (None, None)):
+            return True          # garage coordinates are all zeroes; no signal
+        return here != there
+
     drivers: list[Driver] = []
     for num, line in timing.items():
         meta = drivers_raw.get(num) or {}
@@ -504,6 +524,8 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
             never_started=bool(mv.get("NeverStarted")) if mv else False,
             theo_sectors=tuple(sector_pb),
             pit_time=pit_times.get(str(num)),
+            off_track=str((latest.get(num) or {}).get("Status") or "") == "OffTrack",
+            stationary=bool(latest.get(num)) and not _moved(str(num)),
         )
         total = [x for x in sector_pb if x]
         driver.theo = sum(total) if len(total) == 3 else None
