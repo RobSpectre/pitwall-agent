@@ -13,12 +13,90 @@ an MCP client, a shell agent or Hermes sees is the same.
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shutil
+import subprocess
 import sys
+import time
+from pathlib import Path
 
 from . import feed, meeting, players as playerlib, render
 from .model import find_driver
 from .plugin import init_report
 from .tools import specs
+
+LEVELS = {"CRIT": 0, "HIGH": 1, "MED": 2}
+
+
+def _log_path(explicit: str | None = None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
+    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    return Path(home) / "state" / "pitwall-events.log"
+
+
+def _append_log(path: Path, text: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+    except OSError:
+        pass
+
+
+def _tail(path: Path, count: int) -> list[str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return lines[-count:]
+
+
+def _notify(events) -> None:
+    """Desktop notification -- the point is to be seen without asking a model."""
+    binary = shutil.which("notify-send")
+    if not binary:
+        return
+    worst = "normal" if any(e.level == "HIGH" for e in events) else "low"
+    if any(e.level == "CRIT" for e in events):
+        worst = "critical"
+    head = events[0].text if len(events) == 1 else f"{len(events)} events"
+    body = "\n".join(e.text for e in events[:4])
+    try:
+        subprocess.run(
+            [binary, "-u", worst, "-a", "pitwall", f"pitwall: {head}", body],
+            check=False, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _watch(args) -> int:
+    from . import watch as watcher
+
+    log_path = _log_path(args.log)
+
+    if args.recent:
+        for line in _tail(log_path, args.recent):
+            print(line)
+        return 0
+
+    events = watcher.scan()
+    keep = [e for e in events if LEVELS[e.level] <= LEVELS[args.min_level]]
+    if not keep:
+        return 0
+
+    stamp = time.strftime("%H:%M:%S")
+    if args.json:
+        print(json.dumps([{"at": stamp, "level": e.level, "text": e.text} for e in keep]))
+    else:
+        print(watcher.render(keep, stamp))
+    _append_log(log_path, watcher.render(keep, stamp))
+    if args.notify:
+        _notify(keep)
+    return 0
+
 
 
 def _handler(name: str):
@@ -101,6 +179,14 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("mcp", help="run the MCP server on stdio (for other agents)")
 
+    p = sub.add_parser("watch", help="deterministic change detection - no model involved")
+    p.add_argument("--once", action="store_true", default=True, help="one pass (default)")
+    p.add_argument("--json", action="store_true", help="machine-readable events")
+    p.add_argument("--notify", action="store_true", help="desktop notification when something happens")
+    p.add_argument("--recent", type=int, metavar="N", help="print the last N logged events instead")
+    p.add_argument("--log", default=None, help="event log path (default ~/.hermes/state/pitwall-events.log)")
+    p.add_argument("--min-level", choices=["CRIT", "HIGH", "MED"], default="MED")
+
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
@@ -114,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
 
             run()
             return 0
+        if args.command == "watch":
+            return _watch(args)
         if args.command == "overview":
             return _out(_handler("pitwall_overview")({"messages": args.messages}))
         if args.command == "board":

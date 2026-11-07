@@ -1,0 +1,14 @@
+[Unit]
+Description=pitwall-agent watch every 20 seconds
+Documentation=https://github.com/RobSpectre/pitwall-agent
+
+[Timer]
+# Time between the end of one run and the start of the next.
+OnBootSec=30s
+OnUnitActiveSec=20s
+# systemd rounds timers; without this the cadence can drift by a second or two.
+AccuracySec=1s
+Unit=pitwall-watch.service
+
+[Install]
+WantedBy=timers.target

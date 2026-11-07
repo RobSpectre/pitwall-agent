@@ -1,0 +1,11 @@
+[Unit]
+Description=pitwall-agent live-timing watch (deterministic, no model)
+Documentation=https://github.com/RobSpectre/pitwall-agent
+
+[Service]
+Type=oneshot
+# The detector writes its own state and event log; nothing here needs a shell.
+ExecStart=%h/.hermes/plugins/pitwall-agent/deploy/watch-once.sh
+# A hung feed must not wedge the timer.
+TimeoutStartSec=45
+Nice=5
