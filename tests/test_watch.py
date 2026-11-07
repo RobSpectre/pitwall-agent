@@ -140,3 +140,20 @@ def test_scan_persists_state_between_runs(q3_state, tmp_path, monkeypatch):
     assert watch.scan(path=path) == []
     assert path.exists()
     assert watch.scan(path=path) == []
+
+
+def test_a_resume_announcement_is_critical():
+    assert watch._classify_message({"Message": "SESSION WILL RESUME AT 15:20"}) == watch.CRITICAL
+    assert watch._classify_message({"Message": "QUALIFYING WILL RESUME AT 14:05"}) == watch.CRITICAL
+
+
+def test_an_abandonment_is_critical_and_not_read_as_a_resume():
+    # "WILL NOT RESUME" contains "RESUME" -- ordering matters.
+    assert watch._classify_message({"Message": "SESSION WILL NOT RESUME"}) == watch.CRITICAL
+    assert watch._classify_message({"Message": "SESSION START DELAYED"}) == watch.HIGH
+
+
+def test_recovery_chatter_is_not_critical():
+    for text in ("CLEAR IN TRACK SECTOR 16", "TRACK CLEAR", "GREEN LIGHT - PIT EXIT OPEN"):
+        assert watch._classify_message({"Message": text, "Category": "Flag"}) is None, text
+    assert watch._classify_message({"Message": "RED FLAG", "Category": "Flag"}) == watch.CRITICAL

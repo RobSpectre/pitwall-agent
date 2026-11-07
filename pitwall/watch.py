@@ -106,6 +106,23 @@ def _classify_message(message: dict) -> str | None:
     """Race-control messages that change a call, in priority order."""
     text = str(message.get("Message") or "")
     upper = text.upper()
+    # A session that is stopped and may or may not come back: the single most
+    # useful thing to know during rain. Check the negative form first --
+    # "WILL NOT RESUME" contains "RESUME".
+    if "WILL NOT RESUME" in upper or "NOT RESTART" in upper or "ABANDON" in upper:
+        return CRITICAL
+    if "WILL RESUME" in upper or "RESUME AT" in upper:
+        return CRITICAL
+    if "DELAYED" in upper or "SUSPEND" in upper:
+        return HIGH
+    # Recovery chatter. "CLEAR IN TRACK SECTOR 16", "TRACK CLEAR" and "GREEN
+    # LIGHT - PIT EXIT OPEN" all carry Category=Flag, but the track-status rule
+    # above already reports the recovery; repeating it here just fills the
+    # critical channel.
+    if "CLEAR IN TRACK SECTOR" in upper or upper.startswith("TRACK CLEAR"):
+        return None
+    if "PIT EXIT OPEN" in upper:
+        return None
     if message.get("Category") == "Flag" or message.get("Flag"):
         return CRITICAL
     if "DELETED" in upper:
