@@ -147,6 +147,48 @@ itself unavailable through `check_fn`, decided once per session key. When the
 session cannot be identified every tool is offered, with an error rather than
 silence.
 
+## Watch mode — no model in the loop
+
+A broadcast needs to know when something *happens*, not to re-read the board
+every twenty seconds. `pitwall-agent watch --once` is a deterministic pass:
+
+```bash
+pitwall-agent watch --once            # prints only what is new, silence otherwise
+pitwall-agent watch --once --notify   # also raises a desktop notification
+pitwall-agent watch --recent 20       # the last 20 logged events
+```
+
+It stores what it saw in `~/.hermes/state/pitwall-watch.json`, logs events to
+`~/.hermes/state/pitwall-events.log`, and diffs against that state. Running it
+twice reports nothing the second time. A new session key re-baselines silently
+rather than dumping the whole field.
+
+What counts as an event:
+
+| level | events |
+|---|---|
+| `CRIT` | track status change, session aborted/finished, a driver eliminated, clock marks at 5:00 / 2:00 / 0:30 |
+| `HIGH` | deleted lap, penalty or investigation, new pole, purple sector, car into the drop zone |
+| `MED` | contender personal best, out of the drop zone |
+
+Noise control is deliberate: personal bests only for the top five or anyone
+within half a second of pole, and the drop zone only for the cars around the
+cutoff. Everything else stays in the state file.
+
+`deploy/` carries a 20-second `systemd --user` timer:
+
+```bash
+cp ~/.hermes/plugins/pitwall-agent/deploy/pitwall-watch.* ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now pitwall-watch.timer
+systemctl --user list-timers pitwall-watch.timer
+```
+
+The launcher resolves Hermes's currently selected dependency environment
+instead of hard-coding a venv path, and exits quietly when MultiViewer is
+closed. `hermes`'s own cron ticks once a minute, which is why the 20-second
+cadence runs on a systemd timer.
+
 ## Layout
 
 ```
@@ -163,12 +205,14 @@ pitwall/
   plugin.py          register(): tools, /pitwall, /pitwall init, skills
   cli.py             pitwall-agent command line
   mcp.py             fastmcp server for other agents
+  watch.py           deterministic change detection (no model)
   fixtures.py        fixture generator
+deploy/              systemd service + 20s timer + launcher
 skills/
   practice-session/
   qualifying-session/
   race-session/
-tests/               96 tests
+tests/               117 tests
 ```
 
 ## Tests
