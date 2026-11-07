@@ -45,9 +45,9 @@ def _conditions(session: Session) -> str:
 
 
 def _age(session: Session) -> str:
-    if not session.fetched_at:
+    if session.data_age is None:
         return ""
-    return f" [{fmt_age(time.time() - session.fetched_at)}]"
+    return f" [{fmt_age(session.data_age)}]"
 
 
 def _sector_letters(driver: Driver) -> str:

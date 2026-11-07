@@ -92,8 +92,11 @@ def fmt_clock(seconds: float | None) -> str:
 
 
 def fmt_age(seconds: float | None) -> str:
+    """How stale the *data* is -- not how recently we asked for it."""
     if seconds is None:
         return "?"
-    if seconds < 1.5:
+    if seconds < 2:
         return "live"
-    return f"{seconds:.0f}s ago"
+    if seconds < 90:
+        return f"unchanged {seconds:.0f}s"
+    return f"STALLED {seconds / 60:.0f}m"

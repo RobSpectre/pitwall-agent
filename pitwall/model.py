@@ -193,6 +193,7 @@ class Session:
     total_laps: int | None = None
     current_lap: int | None = None
     mode: str = "unknown"          # practice | qualifying | race | unknown
+    data_age: float = 0.0          # seconds since the document last changed
 
     # --- convenience views -------------------------------------------------
 
@@ -438,7 +439,8 @@ def find_driver(session: Session, needle: object) -> Driver | None:
     return None
 
 
-def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None) -> Session:
+def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
+          data_age: float = 0.0) -> Session:
     """Build a :class:`Session` from an ``F1LiveTimingState`` document."""
     info = state.get("SessionInfo") or {}
     meeting = (info.get("Meeting") or {}).get("Name") or "Unknown meeting"
@@ -574,4 +576,5 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None) -> S
         total_laps=total_laps,
         current_lap=current_lap,
         mode=mode or "unknown",
+        data_age=data_age,
     )

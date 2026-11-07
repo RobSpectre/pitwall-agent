@@ -7,6 +7,8 @@ changed instead of re-reading everything.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import threading
 import time
@@ -77,10 +79,25 @@ def raw_state(*, fresh: bool = False) -> dict:
             "Live timing is idle: no TimingData yet. Wait for the session to start "
             "(or start the replay in MultiViewer)."
         )
+    # Freshness is a property of the *document*, not of our fetch. A paused
+    # replay or a stalled generator returns the same bytes forever, and a tool
+    # that calls that "live" is worse than useless during a red flag.
+    digest = hashlib.blake2b(
+        json.dumps(state, sort_keys=True, separators=(",", ":")).encode(), digest_size=16
+    ).digest()
     with _LOCK:
+        if _CACHE.get("digest") != digest:
+            _CACHE["digest"] = digest
+            _CACHE["changed_at"] = time.time()
         _CACHE["raw"] = state
         _CACHE["at"] = time.time()
     return state
+
+
+def data_age() -> float:
+    """Seconds since the live-timing document last changed."""
+    changed = _CACHE.get("changed_at")
+    return max(0.0, time.time() - changed) if changed else 0.0
 
 
 def snapshot(*, fresh: bool = False) -> tuple[Session, Session | None]:
@@ -93,7 +110,7 @@ def snapshot(*, fresh: bool = False) -> tuple[Session, Session | None]:
     global _PREVIOUS, _PREVIOUS_AT
     state = raw_state(fresh=fresh)
     now = time.time()
-    session = build(state, fetched_at=now, mode=mode_of(state))
+    session = build(state, fetched_at=now, mode=mode_of(state), data_age=data_age())
     with _LOCK:
         previous = _PREVIOUS
         _PREVIOUS = session

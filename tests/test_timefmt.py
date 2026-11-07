@@ -48,4 +48,5 @@ def test_clock_and_age():
     assert timefmt.fmt_clock(252) == "4:12"
     assert timefmt.fmt_clock(None) == "-"
     assert timefmt.fmt_age(0.4) == "live"
-    assert timefmt.fmt_age(12.2) == "12s ago"
+    assert timefmt.fmt_age(12.2) == "unchanged 12s"
+    assert timefmt.fmt_age(300) == "STALLED 5m"
