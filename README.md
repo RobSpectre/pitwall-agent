@@ -136,11 +136,12 @@ Regenerate with `python -m pitwall.fixtures`.
 
 ## Known constraints
 
-- **`mvf1>=2.0.1,<2.1`.** mvf1 2.1 requires `requests>=2.34.2`; Hermes pins
-  `requests==2.33.0`. Everything this plugin uses (`live_timing_state`,
-  `players`, `switch_stream`, `player.sync`) exists in 2.0.1. The player sync
-  action falls back to `player.sync()` on 2.0 and uses
-  `player_sync_to_live_timing()` when the installed mvf1 has it.
+- **`mvf1>=2.1,<3`.** Installed by `hermes plugins install --yes-deps` into the
+  dependency environment Hermes selects, not into `hermes-agent/venv`. mvf1 2.1
+  needs `requests>=2.34.2`, which the PM-built environment carries; an older
+  Hermes that pins `requests==2.33.0` would need the 2.0 line instead — the
+  player sync action falls back to `player.sync()` when
+  `player_sync_to_live_timing()` is absent.
 - Qualifying has been exercised against schema-accurate synthetic fixtures, not
   yet against a live Q1/Q2/Q3 session. Practice and session-start behaviour is
   verified against the real capture.
