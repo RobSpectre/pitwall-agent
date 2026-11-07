@@ -1,0 +1,26 @@
+name: hermes-pitwall
+version: 0.1.0
+description: AI pit wall for MultiViewer - compact, current live-timing reads for a qualifying broadcast.
+license: MIT
+author: Pitwall contributors
+# Hermes pins requests==2.33.0; mvf1 2.1+ requires requests>=2.34.2, so the
+# plugin stays on the 2.0 line to install cleanly inside Hermes's own venv.
+# Everything used here (live_timing_state, players, switch_stream, player.sync)
+# exists in 2.0.1.
+python_dependencies:
+  - "mvf1>=2.0.1,<2.1"
+tags: [motorsport, f1, multiviewer, broadcast, timing, qualifying]
+provides_tools:
+  - pitwall_overview
+  - pitwall_board
+  - pitwall_flying
+  - pitwall_purple
+  - pitwall_pole
+  - pitwall_driver
+  - pitwall_raw
+  - pitwall_show
+config_schema:
+  uri:
+    type: str
+    default: "http://localhost:10101/api/graphql"
+    description: MultiViewer GraphQL endpoint. Also read from MVF1_URI.

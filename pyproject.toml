@@ -1,0 +1,33 @@
+[project]
+name = "hermes-pitwall"
+version = "0.1.0"
+description = "AI pit wall for MultiViewer: compact live-timing reads for a qualifying broadcast."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Pitwall contributors" }]
+keywords = ["f1", "motorsport", "multiviewer", "broadcast", "hermes-plugin"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Games/Entertainment",
+]
+dependencies = ["mvf1>=2.1,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-timeout>=2"]
+
+[project.entry-points."hermes_agent.plugins"]
+hermes-pitwall = "pitwall.plugin"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["pitwall"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = ["tests"]
+pythonpath = ["."]
