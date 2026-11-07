@@ -57,9 +57,14 @@ class FakePlayer:
     def __init__(self, pid=42):
         self.id = pid
         self.calls: list[tuple] = []
+        self.state = {"paused": False, "interpolatedCurrentTime": 1000.0}
 
     def set_fullscreen(self, value=True):
         self.calls.append(("fullscreen", value))
+
+    def pause(self, value=True):
+        self.calls.append(("pause", value))
+        self.state["paused"] = bool(value)
 
     def seek(self, absolute=None, relative=None):
         self.calls.append(("seek", relative))
@@ -162,8 +167,8 @@ def test_frame_creates_a_player_when_none_shows_the_driver(monkeypatch, player_e
     assert "new player" in report
 
 
-def test_frame_reports_a_live_stream_refusal_honestly(monkeypatch, player_env):
-    """MultiViewer refuses to seek live players; the report must not pretend otherwise."""
+def test_frame_pauses_when_the_stream_cannot_be_rewound(monkeypatch, player_env):
+    """Pause works even though seek does not; leave the frame stopped to scrub."""
     session = session_with(**{"16": {"off_track": True}})
     monkeypatch.setattr(incident, "_existing_player", lambda driver, content: 7)
 
@@ -173,7 +178,8 @@ def test_frame_reports_a_live_stream_refusal_honestly(monkeypatch, player_env):
     player_env.seek = refuse
     report, _pid = incident.frame(session.by_num["16"], back=30)
     assert "fullscreen" in report
-    assert "refuses to rewind" in report
+    assert "paused to scrub" in report
+    assert ("pause", True) in player_env.calls
     assert "rewound 30s" not in report
 
 

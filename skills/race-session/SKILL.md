@@ -120,9 +120,9 @@ not moved), syncs the output to the world feed if it has drifted, full-screens
 the best candidate's onboard and seeks back 30 s. Check
 `pitwall-agent watch --recent 5` for the line it logged — it names the driver,
 the player and whether it had to re-sync. If it says
-`live stream: MultiViewer refuses to rewind`, the onboard is up but the stream
-cannot be walked back through the API; scrub in the app instead, and say on air
-that you are going to the replay.
+`rewind blocked by MultiViewer; player paused to scrub`, the onboard is up and
+frozen at the incident: drag it back in the app yourself, then let green resume
+it. The API cannot seek live content even though the UI can.
 
 Penalties arrive as race-control messages ("CAR 63 (RUS) 5 SECOND TIME PENALTY
 - TRACK LIMITS"). They are **not** applied to `pitwall_race` until the stewards

@@ -216,12 +216,19 @@ feed. Run it by hand with `pitwall-agent incident --dry-run` to see the
 ranking without touching a player.
 
 **The rewind only works off the live edge.** MultiViewer answers
-`playerSeekTo` with `Cannot seek in live mode` for a player on the live stream,
-and its API has no mutation to leave live mode — pausing does not release it
-either. The routine then reports
-`(live stream: MultiViewer refuses to rewind, onboard only)` and leaves the
-onboard full screen, which is still the useful half of the request. On an
-archive or replay session the seek lands and the 30 s rewind happens.
+`playerSeekTo` with `Cannot seek in live mode` for live content — it refuses
+even when the player is paused and reports `live: false`, so the guard is on the
+stream, and no mutation in the API clears it. The UI's scrubber works because
+the renderer keeps its own timeshift buffer, which is not exposed over GraphQL.
+Pause *does* work, so the routine pauses and confirms it took:
+
+    LEC stopped -> player 26 fullscreen (existing player; synced to
+    INTERNATIONAL) (live stream: rewind blocked by MultiViewer; player paused
+    to scrub)
+
+That leaves the frame stopped at the incident for a manual scrub, and green
+resumes and re-syncs the player. On an archive or replay session the seek lands
+and the 30 s rewind happens by itself.
 
 ## Layout
 

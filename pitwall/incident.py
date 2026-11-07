@@ -132,6 +132,26 @@ def _existing_player(driver: Driver, content_id: int | None) -> int | None:
     return None
 
 
+def _pause(player_id: int, tries: int = 3, delay: float = 0.4) -> bool:
+    """Pause and confirm it took.
+
+    A sync in flight can resume the player a beat after the mutation returns, so
+    read the state back rather than trusting the call.
+    """
+    for _ in range(tries):
+        try:
+            feed._client().player(player_id).pause(True)
+        except Exception:             # noqa: BLE001
+            pass
+        time.sleep(delay)
+        try:
+            if feed._client().player(player_id).state.get("paused"):
+                return True
+        except Exception:             # noqa: BLE001
+            pass
+    return False
+
+
 def frame(driver: Driver, *, back: int = DEFAULT_BACK) -> tuple[str, int]:
     """Full-screen this driver's onboard and rewind it. Returns (report, player id)."""
     resolution = playerlib.current_resolution()
@@ -147,14 +167,19 @@ def frame(driver: Driver, *, back: int = DEFAULT_BACK) -> tuple[str, int]:
     rewound = back
     try:
         player.seek(relative=-abs(int(back)))
-    except Exception as exc:          # noqa: BLE001 - live players refuse
+    except Exception as exc:          # noqa: BLE001 - live content refuses seeks
         rewound = 0
         message = str(exc).lower()
         if "live" in message:
-            # MultiViewer will not seek a player that is on the live stream, and
-            # there is no mutation in its API to leave live mode. Say so plainly
-            # rather than implying a rewind happened.
-            note = " (live stream: MultiViewer refuses to rewind, onboard only)"
+            # MultiViewer blocks playerSeekTo for live content -- it refuses even
+            # when the player is paused and reports live=false, so the guard is on
+            # the stream, not the player. The UI scrubs through its own timeshift
+            # buffer, which is not in the GraphQL surface. Pausing does work, so
+            # leave the frame stopped at the incident for a manual scrub.
+            if _pause(player_id):
+                note = " (live stream: rewind blocked by MultiViewer; player paused to scrub)"
+            else:
+                note = " (live stream: rewind blocked by MultiViewer; onboard only)"
         else:
             note = f" (rewind unavailable: {type(exc).__name__})"
     else:
@@ -167,14 +192,30 @@ def frame(driver: Driver, *, back: int = DEFAULT_BACK) -> tuple[str, int]:
 
 
 def restore(player_id: int) -> str:
-    """Give the output back: un-fullscreen and return the player to live."""
+    """Give the output back: un-fullscreen, resume, and return the player to live."""
+    parts: list[str] = []
     try:
         player = feed._client().player(player_id)
-        player.set_fullscreen(False)
-        playerlib.control(player_id, "live")
-        return f"player {player_id} back to live, full screen released"
     except Exception as exc:          # noqa: BLE001
-        return f"player {player_id} could not be returned to live ({type(exc).__name__})"
+        return f"player {player_id} is gone ({type(exc).__name__})"
+
+    try:
+        player.set_fullscreen(False)
+        parts.append("full screen released")
+    except Exception:                 # noqa: BLE001
+        pass
+    try:
+        player.pause(False)           # we may have paused it for a manual scrub
+        parts.append("playing")
+    except Exception:                 # noqa: BLE001
+        pass
+    try:
+        playerlib.control(player_id, "live")
+        parts.append("back to live")
+    except Exception:                 # noqa: BLE001
+        parts.append("not returned to live")
+
+    return f"player {player_id}: " + ", ".join(parts or ["nothing to do"])
 
 
 def react(session: Session, previous: dict) -> tuple[str | None, dict]:
