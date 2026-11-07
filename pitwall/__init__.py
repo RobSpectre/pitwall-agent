@@ -1,7 +1,11 @@
-"""pitwall -- an AI pit wall for MultiViewer live timing."""
+"""pitwall-agent -- an AI pit wall for MultiViewer live timing."""
 
-from .model import Driver, Session, build
+from . import feed, meeting, model, players, render, tools
+from .model import Driver, Session, build, find_driver
 from .timefmt import parse_clock, parse_time
 
-__all__ = ["Driver", "Session", "build", "parse_clock", "parse_time"]
-__version__ = "0.1.0"
+__all__ = [
+    "Driver", "Session", "build", "find_driver", "parse_clock", "parse_time",
+    "feed", "meeting", "model", "players", "render", "tools",
+]
+__version__ = "0.2.0"

@@ -1,20 +1,26 @@
-name: hermes-pitwall
-version: 0.1.0
-description: AI pit wall for MultiViewer - compact, current live-timing reads for a qualifying broadcast.
+name: pitwall-agent
+version: 0.2.0
+description: AI pit wall for MultiViewer - compact live-timing reads and video control for any broadcast agent.
 license: MIT
 author: Pitwall contributors
 python_dependencies:
   - "mvf1>=2.1,<3"
-tags: [motorsport, f1, multiviewer, broadcast, timing, qualifying]
+tags: [motorsport, f1, multiviewer, broadcast, timing, qualifying, race, mcp]
 provides_tools:
   - pitwall_overview
   - pitwall_board
   - pitwall_flying
   - pitwall_purple
   - pitwall_pole
+  - pitwall_pace
+  - pitwall_race
+  - pitwall_battle
+  - pitwall_strategy
   - pitwall_driver
+  - pitwall_players
+  - pitwall_player_open
+  - pitwall_player_control
   - pitwall_raw
-  - pitwall_show
 config_schema:
   uri:
     type: str

@@ -11,6 +11,7 @@ import os
 import threading
 import time
 
+from .meeting import mode_of
 from .model import Session, build
 
 DEFAULT_URI = "http://localhost:10101/api/graphql"
@@ -92,7 +93,7 @@ def snapshot(*, fresh: bool = False) -> tuple[Session, Session | None]:
     global _PREVIOUS, _PREVIOUS_AT
     state = raw_state(fresh=fresh)
     now = time.time()
-    session = build(state, fetched_at=now)
+    session = build(state, fetched_at=now, mode=mode_of(state))
     with _LOCK:
         previous = _PREVIOUS
         _PREVIOUS = session
@@ -100,6 +101,35 @@ def snapshot(*, fresh: bool = False) -> tuple[Session, Session | None]:
     if previous is None or previous.key != session.key:
         previous = None
     return session, previous
+
+
+#: Tool gating is decided once per session, not per call: a verdict that flips
+#: between turns would rewrite the tool list mid-conversation. A new session
+#: key (Q3 -> race) is a new context and may legitimately change the set.
+_MODE: dict = {"key": None, "mode": "unknown"}
+
+
+def session_mode() -> str:
+    """``practice`` / ``qualifying`` / ``race`` for the session open now."""
+    try:
+        state = raw_state()
+    except PitwallError:
+        return "unknown"
+    key = (state.get("SessionInfo") or {}).get("Key")
+    with _LOCK:
+        if _MODE["key"] != key:
+            _MODE["key"] = key
+            _MODE["mode"] = mode_of(state)
+        return _MODE["mode"]
+
+
+def known_driver(needle: object, session: Session | None = None):
+    """Resolve a driver code without forcing a parse the caller did not need."""
+    from .model import find_driver
+
+    if session is None:
+        session, _ = snapshot()
+    return find_driver(session, needle)
 
 
 def previous() -> Session | None:
@@ -114,3 +144,5 @@ def reset() -> None:
         _CACHE["at"] = 0.0
         _PREVIOUS = None
         _PREVIOUS_AT = 0.0
+        _MODE["key"] = None
+        _MODE["mode"] = "unknown"

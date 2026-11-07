@@ -44,6 +44,13 @@ TRACK_STATUS = {
 #: Grid slots eliminated at the end of each qualifying part.
 CUTOFF_BY_PART = {"1": 15, "2": 10, "3": None}
 
+#: Tyre compound -> the single letter the timing tower uses.
+COMPOUNDS = {
+    "SOFT": "S", "MEDIUM": "M", "HARD": "H",
+    "INTERMEDIATE": "I", "WET": "W",
+    "UNKNOWN": "?", "TEST_UNKNOWN": "?",
+}
+
 RUN_STATES = ("PUSH", "BUILD", "COOL", "LAP", "OUT", "PIT", "STOPPED", "RETIRED", "DONE", "NONE")
 
 
@@ -70,14 +77,23 @@ class Sector:
 @dataclass(slots=True)
 class Stint:
     compound: str
-    laps: int
-    start_laps: int = 0
+    start_laps: int
+    total_laps: int
+    lap_time: float | None = None
+    new: bool = True
+
+    @property
+    def age(self) -> int:
+        """Laps completed on this set of tyres."""
+        return max(0, self.total_laps - self.start_laps)
+
+    @property
+    def code(self) -> str:
+        return COMPOUNDS.get(self.compound.upper(), (self.compound[:1] or "?").upper())
 
     @property
     def label(self) -> str:
-        if not self.compound:
-            return f"?{self.laps}"
-        return f"{self.compound}{self.laps}" if self.laps else self.compound
+        return f"{self.code}{self.age}" if self.compound else f"?{self.age}"
 
 
 @dataclass(slots=True)
@@ -109,6 +125,7 @@ class Driver:
     stints: list[Stint] = field(default_factory=list)
     never_started: bool = False
     theo_sectors: tuple[float | None, ...] = ()
+    pit_time: float | None = None
 
     # derived
     run: str = "NONE"
@@ -117,6 +134,20 @@ class Driver:
     theo: float | None = None      # own best sectors summed
     proj: float | None = None      # current lap projected with own best sectors
     delta_pb: float | None = None  # current lap vs own best-sector pace, cumulative
+
+    @property
+    def stint(self) -> Stint | None:
+        return self.stints[-1] if self.stints else None
+
+    @property
+    def tyre(self) -> str:
+        stint = self.stint
+        return stint.label if stint else "-"
+
+    @property
+    def stops(self) -> int:
+        """Pit stops so far, inferred from the number of tyre runs."""
+        return max(0, len(self.stints) - 1)
 
     @property
     def on_track(self) -> bool:
@@ -159,6 +190,9 @@ class Session:
     radio: list[dict]
     fetched_at: float
     archive: str = ""
+    total_laps: int | None = None
+    current_lap: int | None = None
+    mode: str = "unknown"          # practice | qualifying | race | unknown
 
     # --- convenience views -------------------------------------------------
 
@@ -243,11 +277,24 @@ def _sectors(line: dict) -> list[Sector]:
 
 
 def _stints(entry: dict) -> list[Stint]:
+    """Parse ``TimingAppData`` stints.
+
+    The feed records one entry per run of tyres and keeps updating ``TotalLaps``
+    as the run continues, so a stint's age is ``TotalLaps - StartLaps``.
+    """
     out: list[Stint] = []
-    for stint in entry.get("Stints") or ():
-        laps = len(stint.get("Laps") or ())
-        out.append(Stint(compound=str(stint.get("Compound") or ""), laps=laps,
-                         start_laps=int(stint.get("StartLaps") or 0)))
+    for item in entry.get("Stints") or ():
+        start = int(item.get("StartLaps") or 0)
+        total = int(item.get("TotalLaps") or start)
+        out.append(
+            Stint(
+                compound=str(item.get("Compound") or ""),
+                start_laps=start,
+                total_laps=total,
+                lap_time=parse_time(item.get("LapTime")),
+                new=str(item.get("New") or "true").strip().lower() not in {"false", "0"},
+            )
+        )
     return out
 
 
@@ -361,7 +408,37 @@ def _session_part(state: dict) -> str | None:
     return None
 
 
-def build(state: dict, *, fetched_at: float = 0.0) -> Session:
+def _lap_count(state: dict) -> tuple[int | None, int | None]:
+    count = state.get("LapCount") or {}
+
+    def as_int(value: object) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    return as_int(count.get("CurrentLap")), as_int(count.get("TotalLaps"))
+
+
+def find_driver(session: Session, needle: object) -> Driver | None:
+    """Resolve a racing number, TLA, or partial name to a Driver."""
+    key = str(needle or "").strip().upper()
+    if not key:
+        return None
+    if key in session.by_num:
+        return session.by_num[key]
+    for driver in session.drivers:
+        if key in {driver.tla.upper(), driver.name.upper()}:
+            return driver
+    for driver in session.drivers:
+        if key in driver.name.upper():
+            return driver
+    return None
+
+
+def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None) -> Session:
     """Build a :class:`Session` from an ``F1LiveTimingState`` document."""
     info = state.get("SessionInfo") or {}
     meeting = (info.get("Meeting") or {}).get("Name") or "Unknown meeting"
@@ -371,6 +448,10 @@ def build(state: dict, *, fetched_at: float = 0.0) -> Session:
     drivers_raw = (state.get("DriverList")) or {}
     stats = ((state.get("TimingStats") or {}).get("Lines")) or {}
     app = ((state.get("TimingAppData") or {}).get("Lines")) or {}
+    pit_times = {
+        str(num): parse_time((entry or {}).get("Duration"))
+        for num, entry in (((state.get("PitLaneTimeCollection") or {}).get("PitTimes")) or {}).items()
+    }
 
     drivers: list[Driver] = []
     for num, line in timing.items():
@@ -420,6 +501,7 @@ def build(state: dict, *, fetched_at: float = 0.0) -> Session:
             stints=_stints(app.get(num) or {}),
             never_started=bool(mv.get("NeverStarted")) if mv else False,
             theo_sectors=tuple(sector_pb),
+            pit_time=pit_times.get(str(num)),
         )
         total = [x for x in sector_pb if x]
         driver.theo = sum(total) if len(total) == 3 else None
@@ -460,6 +542,7 @@ def build(state: dict, *, fetched_at: float = 0.0) -> Session:
     clock = state.get("ExtrapolatedClock") or {}
     status = state.get("SessionStatus") or {}
     archive = ((state.get("ArchiveStatus") or {}).get("Status")) or ""
+    current_lap, total_laps = _lap_count(state)
 
     return Session(
         key=info.get("Key"),
@@ -488,4 +571,7 @@ def build(state: dict, *, fetched_at: float = 0.0) -> Session:
         radio=list((state.get("TeamRadio") or {}).get("Captures") or ()),
         fetched_at=fetched_at,
         archive=archive,
+        total_laps=total_laps,
+        current_lap=current_lap,
+        mode=mode or "unknown",
     )

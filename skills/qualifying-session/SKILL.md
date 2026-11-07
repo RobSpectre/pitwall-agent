@@ -26,11 +26,17 @@ field for about 1.2 KB, instead of the 75 KB raw document.
 ## The 60-second loop
 
 ```
+/pitwall init             ~150 tokens  MultiViewer up? which session? content id?
 pitwall_overview          ~90 tokens   session, clock, pole, track, flags
 pitwall_board             ~300 tokens  full order, gaps, run state
 pitwall_flying            ~100 tokens  who is on a flyer, with projection
 pitwall_pole              ~130 tokens  contention + clock feasibility
+pitwall_pace              ~180 tokens  best lap vs the run they are on
 ```
+
+Start a session with `/pitwall init`: it confirms MultiViewer is running,
+names the session, resolves the video content id, and tells you which tools
+this session type offers. Everything after that is the loop.
 
 During a live Q1/Q2/Q3:
 
@@ -174,18 +180,25 @@ the drop zone with one lap left".
 
 ## Directing the broadcast
 
-`pitwall_show` drives MultiViewer itself:
+`pitwall_player_open` creates a MultiViewer window and resolves the session
+content id from the meetings API itself — never hand it an id you invented:
 
-- `pitwall_show(driver="LEC")` — switch the first open player to that onboard.
-- `pitwall_show(driver="LEC", player=4)` — a specific player.
-- `pitwall_show(action="data")` — put a player on the live timing data channel.
-- `pitwall_show(action="sync")` — re-align every open player to live timing.
+- `pitwall_player_open(driver="LEC")` — a Leclerc onboard, tiled automatically.
+- `pitwall_player_open(stream="DATA")` — the live-timing channel.
+- `pitwall_player_control(action="tile", screen="3840x2160", side="right")` —
+  lay every open player out in a grid.
+- `pitwall_player_control(player=6, action="close")` — when a car is done.
+- `pitwall_players` — what is open, where, and whether it is still on this
+  session's content id.
 
 Cut **to** the car on the flyer only when it is relevant: on for pole, on for
 the drop-zone escape, or a personal best in sector 1 of a lap that started
 poorly. Do not chase every `PUSH` — there are usually three or four.
 
-Prefer one action per response. A broadcast operator can only look at one thing.
+In qualifying the useful layout is the world feed plus DATA, and at most two
+onboards. Swap the onboard rather than opening a fifth window.
+
+One action per response. A broadcast operator can only look at one thing.
 
 ## Judgement, not narration
 
@@ -228,7 +241,7 @@ a 1:09.8, two hundredths under Verstappen's pole. Piastri is a tenth off that on
 his own flyer. Verstappen and Norris are both in the garage with 3:20 left, so
 they have time for one more run."
 
-Then `pitwall_show(driver="LEC")` if the operator wants the onboard.
+Then `pitwall_player_open(driver="LEC")` if the operator wants the onboard.
 
 ## Reference
 

@@ -118,5 +118,5 @@ def test_driver_detail(q3):
     assert "LEC  Charles LECLERC  Ferrari  P3  #16" in text
     assert "best 1:10.044" in text
     assert "PUSH" in text
-    assert "SOFT8" in text
+    assert "S8" in text
     assert len(text) < 400

@@ -116,9 +116,18 @@ def _stats_line(num: str, position: int, sectors: tuple[float, float, float], be
     }
 
 
-def _stint(laps: int, compound: str = "SOFT") -> dict:
-    return {"Stint": 1, "Compound": compound, "StartLaps": 0,
-            "Laps": [{"Lap": i + 1, "LapTime": _lap(70.0 + i * 0.1)} for i in range(laps)]}
+def _stint(start: int, total: int, compound: str = "SOFT", lap_time: float = 70.0) -> dict:
+    """One tyre run in the shape the real feed uses."""
+    return {
+        "Stint": 1,
+        "Compound": compound,
+        "New": "true",
+        "TyresNotChanged": "0",
+        "StartLaps": start,
+        "TotalLaps": total,
+        "LapNumber": total + 1,
+        "LapTime": _lap(lap_time),
+    }
 
 
 def _base() -> dict:
@@ -226,7 +235,7 @@ def build_q3() -> dict:
             in_pit=in_pit, outlap=outlap, purple_flags=purple, pb_flags=pb,
         )
         stats[num] = _stats_line(num, position, sectors, best)
-        app[num] = {"RacingNumber": num, "Line": position, "Stints": [_stint(8)]}
+        app[num] = {"RacingNumber": num, "Line": position, "Stints": [_stint(0, 8)]}
 
     state["TimingData"]["Lines"] = timing
     state["TimingStats"]["Lines"] = stats
@@ -268,6 +277,100 @@ def build_q1() -> dict:
     return state
 
 
+def build_race() -> dict:
+    """Lap 32 of 57: a two-stop race with a fight for P3 and a penalty pending."""
+    state = build_q3()
+    info = state["SessionInfo"]
+    info["Type"] = "Race"
+    info["Name"] = "Race"
+    info["Number"] = 1
+    state["SessionData"]["StatusSeries"] = [
+        {"Utc": "2026-11-08T17:00:00.000Z", "SessionStatus": "Started"},
+    ]
+    state["ExtrapolatedClock"] = {"Utc": "2026-11-07T16:32:00.000Z", "Remaining": "00:52:10", "Extrapolating": True}
+    state["LapCount"] = {"CurrentLap": "32", "TotalLaps": "57"}
+    state["TimingStats"]["SessionType"] = "Race"
+
+    lines = state["TimingData"]["Lines"]
+    stats = state["TimingStats"]["Lines"]
+    app = state["TimingAppData"]["Lines"]
+
+    # (position, number, interval to the car ahead, last lap, compound, stint start lap)
+    plan = [
+        (1, "3", 0.0, 72.410, "MEDIUM", 18),
+        (2, "1", 4.212, 72.388, "MEDIUM", 18),
+        (3, "16", 6.901, 72.201, "HARD", 12),
+        (4, "81", 0.412, 72.150, "HARD", 12),
+        (5, "63", 0.884, 72.334, "SOFT", 25),
+        (6, "44", 2.310, 72.502, "SOFT", 25),
+        (7, "14", 8.774, 72.640, "MEDIUM", 18),
+        (8, "12", 11.205, 72.811, "HARD", 12),
+        (9, "55", 14.902, 72.944, "MEDIUM", 18),
+        (10, "23", 18.338, 73.010, "HARD", 12),
+        (11, "6", 21.774, 73.220, "MEDIUM", 18),
+        (12, "27", 25.101, 73.388, "SOFT", 25),
+        (13, "10", 28.554, 73.401, "HARD", 12),
+        (14, "30", 31.902, 73.512, "MEDIUM", 18),
+        (15, "18", 35.220, 73.640, "HARD", 12),
+        (16, "51", 38.771, 73.802, "SOFT", 25),
+        (17, "87", 42.115, 73.910, "MEDIUM", 18),
+        (18, "43", 45.660, 74.020, "HARD", 12),
+        (19, "5", 49.202, 74.101, "MEDIUM", 18),
+        (20, "41", 53.884, 74.220, "SOFT", 25),
+        (21, "77", 58.102, 74.388, "HARD", 12),
+        (22, "11", 62.771, 74.502, "MEDIUM", 18),
+    ]
+    pit_times = {}
+    for position, num, interval, last_lap, compound, start in plan:
+        line = lines[num]
+        line["Position"] = str(position)
+        line["Line"] = position
+        line["TimeDiffToFastest"] = "" if position == 1 else f"{sum(p[2] for p in plan[:position]):.3f}"
+        line["TimeDiffToPositionAhead"] = "" if position == 1 else f"{interval:.3f}"
+        line["LastLapTime"] = {
+            "Value": _lap(last_lap), "Status": 0,
+            "OverallFastest": position == 3, "PersonalFastest": position == 3,
+        }
+        line["NumberOfLaps"] = 31
+        line["Sectors"] = [
+            {"Stopped": False, "Value": "", "Status": 0, "OverallFastest": False,
+             "PersonalFastest": False, "Segments": _segments(0)}
+            for _ in range(3)
+        ]
+        line["MVStatus"]["InPit"] = False
+        line["MVStatus"]["Outlap"] = False
+
+        first_end = 17 if start >= 18 else 11
+        app[num] = {
+            "RacingNumber": num,
+            "Line": position,
+            "Stints": [
+                _stint(0, first_end, "SOFT" if start >= 18 else "MEDIUM", last_lap + 0.9),
+                _stint(start, 32, compound, last_lap),
+            ],
+        }
+        stats[num]["BestSectors"] = [
+            {"Value": _sec(19.9), "Position": position},
+            {"Value": _sec(36.1), "Position": position},
+            {"Value": _sec(16.2), "Position": position},
+        ]
+        if position % 7 == 0:
+            pit_times[num] = {"RacingNumber": num, "Duration": "21.904", "Lap": "18"}
+
+    state["PitLaneTimeCollection"] = {"PitTimes": pit_times}
+    state["TrackStatus"] = {"Status": "1", "Message": "AllClear"}
+    state["RaceControlMessages"]["Messages"] = [
+        {"Utc": "2026-11-08T16:58:02", "Category": "Flag", "Flag": "GREEN",
+         "Scope": "Track", "Message": "GREEN LIGHT - PIT EXIT OPEN"},
+        {"Utc": "2026-11-08T17:28:44", "Category": "Other",
+         "Message": "CAR 63 (RUS) 5 SECOND TIME PENALTY - TRACK LIMITS"},
+    ]
+    state["TeamRadio"] = {"Captures": [
+        {"Utc": "2026-11-08T17:29:30.000Z", "RacingNumber": "16", "Path": "TeamRadio/LEC_16_20261108_172930.mp3"},
+    ]}
+    return state
+
+
 def main(argv: list[str] | None = None) -> None:
     import sys
 
@@ -280,7 +383,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"captured {len(json.dumps(state))} bytes -> {REAL}")
 
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-    for name, builder in (("q3_interlagos.json", build_q3), ("q1_interlagos.json", build_q1)):
+    builders = (
+        ("q3_interlagos.json", build_q3),
+        ("q1_interlagos.json", build_q1),
+        ("race_interlagos.json", build_race),
+    )
+    for name, builder in builders:
         path = FIXTURE_DIR / name
         payload = _trim(builder())
         path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -288,8 +396,9 @@ def main(argv: list[str] | None = None) -> None:
 
 
 #: Sections the plugin never reads; dropped so the committed fixtures stay small.
+#: ``LapCount`` and ``PitLaneTimeCollection`` are kept -- race reads need both.
 _DROPPED = {"CarData", "Position", "AudioStreams", "ContentStreams", "WeatherDataSeries",
-            "LapSeries", "LapCount", "TopThree", "PitLaneTimeCollection", "ChampionshipPrediction"}
+            "LapSeries", "TopThree", "ChampionshipPrediction"}
 
 
 def _trim(state: dict) -> dict:
