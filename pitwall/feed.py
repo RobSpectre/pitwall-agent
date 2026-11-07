@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 
 from .meeting import mode_of
 from .model import Session, build
@@ -84,20 +85,70 @@ def raw_state(*, fresh: bool = False) -> dict:
     # that calls that "live" is worse than useless during a red flag.
     digest = hashlib.blake2b(
         json.dumps(state, sort_keys=True, separators=(",", ":")).encode(), digest_size=16
-    ).digest()
+    ).hexdigest()
     with _LOCK:
-        if _CACHE.get("digest") != digest:
-            _CACHE["digest"] = digest
-            _CACHE["changed_at"] = time.time()
+        _load_seen()
+        if _SEEN["digest"] != digest:
+            _SEEN["digest"] = digest
+            _SEEN["changed_at"] = time.time()
+            _save_seen()
         _CACHE["raw"] = state
         _CACHE["at"] = time.time()
     return state
 
 
+#: Last digest we observed, and when it last differed. Persisted so a *new
+#: process* can tell a frozen feed from a live one: the in-memory baseline is
+#: useless on a cold start, which is exactly when a stalled feed matters.
+_SEEN: dict = {"digest": None, "changed_at": 0.0, "loaded": False}
+
+
+def _state_path():
+    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    return Path(home) / "state" / "pitwall-feed.json"
+
+
+def _load_seen() -> None:
+    if _SEEN["loaded"]:
+        return
+    _SEEN["loaded"] = True
+    try:
+        payload = json.loads(_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    _SEEN["digest"] = payload.get("digest") or None
+    try:
+        _SEEN["changed_at"] = float(payload.get("changed_at") or 0.0)
+    except (TypeError, ValueError):
+        _SEEN["changed_at"] = 0.0
+
+
+def _save_seen() -> None:
+    path = _state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(
+            json.dumps({"digest": _SEEN["digest"], "changed_at": _SEEN["changed_at"]}),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def data_age() -> float:
-    """Seconds since the live-timing document last changed."""
-    changed = _CACHE.get("changed_at")
-    return max(0.0, time.time() - changed) if changed else 0.0
+    """Seconds since the live-timing document last changed.
+
+    Survives process restarts: if the gateway and a CLI read the same bytes for
+    ten minutes, both report ten minutes, not "live".
+    """
+    with _LOCK:
+        _load_seen()
+        changed = _SEEN.get("changed_at") or 0.0
+    if not changed:
+        return 0.0
+    return max(0.0, min(time.time() - changed, 86_400.0))
 
 
 def snapshot(*, fresh: bool = False) -> tuple[Session, Session | None]:
@@ -163,3 +214,6 @@ def reset() -> None:
         _PREVIOUS_AT = 0.0
         _MODE["key"] = None
         _MODE["mode"] = "unknown"
+        _SEEN["digest"] = None
+        _SEEN["changed_at"] = 0.0
+        _SEEN["loaded"] = False

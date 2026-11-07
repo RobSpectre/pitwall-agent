@@ -65,6 +65,25 @@ def test_render_says_stalled_instead_of_live(live, q3_state):
     assert "[live]" in render.overview(fresh)
 
 
+def test_a_new_process_inherits_the_last_change_time(q3_state, tmp_path, monkeypatch):
+    """A cold start must not call a frozen document 'live'."""
+    path = tmp_path / "pitwall-feed.json"
+    monkeypatch.setattr(feed, "_state_path", lambda: path)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(feed.time, "time", lambda: clock["t"])
+    client = FakeLive(q3_state)
+    monkeypatch.setattr(feed, "_client", lambda: client)
+
+    feed.raw_state(fresh=True)          # first process sees this document
+    assert feed.data_age() == pytest.approx(0.0)
+
+    # 90 seconds pass; a *new* process reads the same bytes.
+    feed.reset()
+    clock["t"] += 90.0
+    feed.raw_state(fresh=True)
+    assert feed.data_age() == pytest.approx(90.0)
+
+
 def test_snapshot_carries_the_data_age(live, q3_state, monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(feed.time, "time", lambda: clock["t"])

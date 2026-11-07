@@ -9,6 +9,15 @@ from pitwall import feed, meeting
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolated_feed_state(monkeypatch, tmp_path):
+    """Keep the persisted freshness digest out of the real ~/.hermes."""
+    feed.reset()
+    monkeypatch.setattr(feed, "_state_path", lambda: tmp_path / "pitwall-feed.json")
+    yield
+    feed.reset()
+
+
 def load(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
