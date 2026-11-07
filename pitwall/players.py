@@ -184,6 +184,16 @@ def control(player_id: int, action: str, *, value=None) -> str:
     if action == "fullscreen":
         player.set_fullscreen(True)
         return f"player {player_id} fullscreen"
+    if action == "always_on_top":
+        level = value if isinstance(value, str) and value else None
+        try:
+            player.set_always_on_top(True, level=level)   # mvf1 >= 2.2
+        except TypeError:
+            player.set_always_on_top(True)
+        return f"player {player_id} always on top" + (f" ({level})" if level else "")
+    if action == "always_on_bottom":
+        player.set_always_on_top(False)
+        return f"player {player_id} no longer always on top"
     return f"unknown action {action!r}"
 
 

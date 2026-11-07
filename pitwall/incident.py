@@ -152,6 +152,19 @@ def _pause(player_id: int, tries: int = 3, delay: float = 0.4) -> bool:
     return False
 
 
+def _raise_window(player) -> None:
+    """Full screen is not enough if another window is sitting on top of it."""
+    try:
+        player.set_always_on_top(True, level="FLOATING")   # mvf1 >= 2.2
+    except TypeError:                                      # older signature
+        try:
+            player.set_always_on_top(True)
+        except Exception:      # noqa: BLE001
+            pass
+    except Exception:          # noqa: BLE001
+        pass
+
+
 def frame(driver: Driver, *, back: int = DEFAULT_BACK) -> tuple[str, int]:
     """Full-screen this driver's onboard and rewind it. Returns (report, player id)."""
     resolution = playerlib.current_resolution()
@@ -164,9 +177,10 @@ def frame(driver: Driver, *, back: int = DEFAULT_BACK) -> tuple[str, int]:
     player = _await_player(player_id)
     synced = ensure_synced(player_id)
     player.set_fullscreen(True)
+    _raise_window(player)
     rewound = back
     try:
-        player.seek(relative=-abs(int(back)))
+        player.seek(relative=-abs(float(back)))
     except Exception as exc:          # noqa: BLE001 - live content refuses seeks
         rewound = 0
         message = str(exc).lower()
@@ -202,6 +216,11 @@ def restore(player_id: int) -> str:
     try:
         player.set_fullscreen(False)
         parts.append("full screen released")
+    except Exception:                 # noqa: BLE001
+        pass
+    try:
+        player.set_always_on_top(False)
+        parts.append("window released")
     except Exception:                 # noqa: BLE001
         pass
     try:

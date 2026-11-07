@@ -61,11 +61,13 @@ decided in.
 Requires MultiViewer running with a session open (F1 TV Pro for live timing).
 
 ```bash
-hermes plugins install <owner>/pitwall-agent --yes-deps --enable
+hermes plugins install <owner>/pitwall-agent --enable
 hermes gateway restart     # a running process never switches dependency environments
 ```
 
-`--yes-deps` lets Hermes install `mvf1` into its own dependency environment.
+`mvf1` comes from the plugin's own `python_dependencies`, so Hermes installs it
+into the dependency environment it selected. An installed plugin only upgrades
+when its declared dependency floor changes — hence the `>=2.2` bump below.
 
 Then, in a Hermes session:
 
@@ -274,11 +276,14 @@ cannot be produced on demand from an offline replay. Regenerate with
 
 ## Known constraints
 
-- **`mvf1>=2.1,<3`.** Installed by `hermes plugins install --yes-deps` into the
-  dependency environment Hermes selects, not into `hermes-agent/venv`. mvf1 2.1
-  needs `requests>=2.34.2`, which the PM-built environment carries. On an older
-  Hermes that pins `requests==2.33.0`, use the 2.0 line — the player sync action
-  falls back to `player.sync()` when `player_sync_to_live_timing()` is absent.
+- **`mvf1>=2.2,<3`.** Declared in `plugin.yaml`, so Hermes installs it into the
+  dependency environment it selects, not into `hermes-agent/venv`. 2.2 needs
+  `requests>=2.34.2` and `click>=8.5.1`; both are satisfied in the PM-built
+  environment. 2.2 also types `seek()` as float (fractional offsets) and gives
+  `set_always_on_top()` a window `level`, both of which this plugin uses; on an
+  older Hermes that pins `requests==2.33.0`, stay on the 2.0 line — the player
+  sync action falls back to `player.sync()` when `player_sync_to_live_timing()`
+  is absent.
 - Qualifying and race behaviour is exercised against schema-accurate synthetic
   fixtures, not yet against a live session. Practice and session-start
   behaviour is verified against the real capture.

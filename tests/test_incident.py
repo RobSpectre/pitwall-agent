@@ -62,6 +62,9 @@ class FakePlayer:
     def set_fullscreen(self, value=True):
         self.calls.append(("fullscreen", value))
 
+    def set_always_on_top(self, value=True, level=None):
+        self.calls.append(("always_on_top", value, level))
+
     def pause(self, value=True):
         self.calls.append(("pause", value))
         self.state["paused"] = bool(value)
@@ -146,7 +149,9 @@ def test_frame_full_screens_and_rewinds(monkeypatch, player_env):
     monkeypatch.setattr(incident, "_existing_player", lambda driver, content: 7)
     report, pid = incident.frame(session.by_num["16"], back=30)
     assert pid == 7
-    assert player_env.calls == [("fullscreen", True), ("seek", -30)]
+    assert ("fullscreen", True) in player_env.calls
+    assert ("always_on_top", True, "FLOATING") in player_env.calls
+    assert ("seek", -30.0) in player_env.calls
     assert "LEC" in report and "30s" in report
 
 
