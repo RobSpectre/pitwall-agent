@@ -7,16 +7,36 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / py${{ matrix.python }}
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The suite never talks to MultiViewer -- every feed call is
+      # monkeypatched -- so this exercises parsing, models and renderers on all
+      # three platforms rather than only where it was written.
       - name: Install
-        run: |
-          uv venv .venv --python ${{ matrix.python }}
-          uv pip install --python .venv/bin/python -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
+
       - name: Test
-        run: .venv/bin/python -m pytest -q
+        run: python -m pytest -q
+
+      - name: CLI loads
+        run: python -m pitwall.cli --help
+
+      # The renderers are pure, so Linux CI can prove the macOS plist and the
+      # Windows task XML are well formed without a Mac or a PC.
+      - name: Service units render
+        run: |
+          python -m pitwall.cli service install --dry-run --kind systemd
+          python -m pitwall.cli service install --dry-run --kind launchd
+          python -m pitwall.cli service install --dry-run --kind taskscheduler

@@ -16,12 +16,13 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from . import feed, meeting, players as playerlib, render
+from . import __version__, feed, meeting, players as playerlib, render
 from .model import find_driver
 from .plugin import init_report
 from .tools import specs
@@ -53,34 +54,88 @@ def _tail(path: Path, count: int) -> list[str]:
     return lines[-count:]
 
 
+def _applescript(text: str) -> str:
+    """An AppleScript string literal: escaping only backslash and quote."""
+    return '"' + " ".join(str(text).split()).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _powershell(text: str) -> str:
+    return "'" + " ".join(str(text).split()).replace("'", "''") + "'"
+
+
+def _notify_commands(urgency: str, title: str, body: str):
+    """The notification command this platform understands, if any.
+
+    Every branch is optional: a machine with no notifier is a normal machine,
+    and the event log is the source of truth either way.
+    """
+    if sys.platform.startswith("linux"):
+        binary = shutil.which("notify-send")
+        if binary:
+            yield [binary, "-u", urgency, "-a", "pitwall", title, body]
+    elif sys.platform == "darwin":
+        script = (
+            f"display notification {_applescript(body)} "
+            f"with title {_applescript(title)}"
+        )
+        yield ["osascript", "-e", script]
+    elif os.name == "nt":
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "Add-Type -AssemblyName System.Drawing;"
+            "$n = New-Object System.Windows.Forms.NotifyIcon;"
+            "$n.Icon = [System.Drawing.SystemIcons]::Information;"
+            "$n.Visible = $true;"
+            f"$n.ShowBalloonTip(4000, {_powershell(title)}, {_powershell(body)}, "
+            "[System.Windows.Forms.ToolTipIcon]::Info);"
+            "Start-Sleep -Seconds 4; $n.Dispose()"
+        )
+        yield ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+
+
 def _notify(events) -> None:
     """Desktop notification -- the point is to be seen without asking a model."""
-    binary = shutil.which("notify-send")
-    if not binary:
-        return
     worst = "normal" if any(e.level == "HIGH" for e in events) else "low"
     if any(e.level == "CRIT" for e in events):
         worst = "critical"
     head = events[0].text if len(events) == 1 else f"{len(events)} events"
     body = "\n".join(e.text for e in events[:4])
-    try:
-        subprocess.run(
-            [binary, "-u", worst, "-a", "pitwall", f"pitwall: {head}", body],
-            check=False, timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        pass
+    for command in _notify_commands(worst, f"pitwall: {head}", body):
+        try:
+            subprocess.run(command, check=False, timeout=6)
+            return
+        except (OSError, subprocess.SubprocessError):
+            continue
 
 
 def _watch(args) -> int:
-    from . import watch as watcher
-
     log_path = _log_path(args.log)
 
     if args.recent:
         for line in _tail(log_path, args.recent):
             print(line)
         return 0
+
+    if getattr(args, "loop", False):
+        return _watch_loop(args, log_path)
+
+    # A timer tick that lands while a loop is running must not double-log;
+    # skipping is the correct outcome for a scheduled pass, not a failure.
+    from .lock import SingleInstance, path as lock_path
+
+    lock = SingleInstance(lock_path())
+    if not lock.acquire():
+        print("pitwall: another watcher is running; skipping this pass", file=sys.stderr)
+        return 0
+    try:
+        return _watch_pass(args, log_path)
+    finally:
+        lock.release()
+
+
+def _watch_pass(args, log_path: Path) -> int:
+    """One detection pass: prints and logs only when something happened."""
+    from . import watch as watcher
 
     events = watcher.scan(react=args.react)
     keep = [e for e in events if LEVELS[e.level] <= LEVELS[args.min_level]]
@@ -97,6 +152,55 @@ def _watch(args) -> int:
         _notify(keep)
     return 0
 
+
+
+def _watch_loop(args, log_path: Path) -> int:
+    """Poll forever at a fixed cadence, one pass at a time.
+
+    This is the macOS and Windows shape: launchd and Task Scheduler are both
+    poor places to hold a 20-second beat, so the process owns the clock instead.
+    The lock keeps a second copy from double-logging every event.
+    """
+    from .lock import SingleInstance, path as lock_path
+
+    interval = max(5, int(getattr(args, "interval", 20) or 20))
+    lock = SingleInstance(lock_path())
+    if not lock.acquire():
+        print("pitwall: another watcher already holds the lock", file=sys.stderr)
+        return 1
+
+    stopping = False
+
+    def _stop(*_signal) -> None:
+        nonlocal stopping
+        stopping = True
+
+    for number in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(number, _stop)
+        except (ValueError, OSError):
+            pass                      # not settable on this platform/thread
+
+    try:
+        tick = time.monotonic()
+        while not stopping:
+            try:
+                _watch_pass(args, log_path)
+            except Exception as exc:   # a dead feed is a skipped pass, not a dead watcher
+                print(f"pitwall: pass failed ({type(exc).__name__}: {exc})", file=sys.stderr)
+            if stopping:
+                break
+            tick += interval
+            remaining = tick - time.monotonic()
+            if remaining <= 0:
+                tick = time.monotonic()    # fell behind: resync instead of sprinting
+                continue
+            end = time.monotonic() + remaining
+            while not stopping and time.monotonic() < end:
+                time.sleep(min(1.0, max(0.0, end - time.monotonic())))
+    finally:
+        lock.release()
+    return 0
 
 
 def _incident(args) -> int:
@@ -143,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="pitwall-agent",
         description="Compact MultiViewer live-timing reads for a broadcast agent.",
     )
-    parser.add_argument("--version", action="version", version="pitwall-agent 0.2.0")
+    parser.add_argument("--version", action="version", version=f"pitwall-agent {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("init", help="check MultiViewer, identify the session and content id")
@@ -175,6 +279,43 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("strategy", help="tyre runs, stops, laps remaining")
     p.add_argument("--limit", type=int, default=10)
 
+    p = sub.add_parser("tyres", help="fitted tyre degradation per car")
+    p.add_argument("--limit", type=int, default=12)
+
+    p = sub.add_parser("fuel", help="last lap corrected to an empty tank")
+    p.add_argument("--start-kg", dest="start_kg", type=float, default=None)
+    p.add_argument("--effect", type=float, default=None)
+    p.add_argument("--limit", type=int, default=12)
+
+    p = sub.add_parser("overtake", help="pairs in range, pace delta, projected pass lap")
+    p.add_argument("--window", type=float, default=2.0)
+    p.add_argument("--floor", type=float, default=None)
+
+    p = sub.add_parser("pitplan", help="ranked stop plans for one car")
+    p.add_argument("--driver", help="three-letter code or racing number (default: the leader)")
+    p.add_argument("--stops", type=int, choices=(1, 2))
+    p.add_argument("--pit-loss", dest="pit_loss", type=float, default=None)
+    p.add_argument("--limit", type=int, default=3)
+
+    p = sub.add_parser("undercut", help="who can win a place in the pit lane")
+    p.add_argument("--window", type=float, default=25.0)
+    p.add_argument("--pit-loss", dest="pit_loss", type=float, default=None)
+    p.add_argument("--limit", type=int, default=8)
+
+    p = sub.add_parser("windows", help="laps left on each set against laps to the flag")
+    p.add_argument("--limit", type=int, default=12)
+
+    p = sub.add_parser("outlook", help="projected finishing order from here")
+    p.add_argument("--pit-loss", dest="pit_loss", type=float, default=None)
+    p.add_argument("--limit", type=int, default=10)
+
+    p = sub.add_parser("radio", help="driver radio transcriptions, cut at the playhead")
+    p.add_argument("--driver", action="append", default=None, metavar="DRV",
+                   help="one car or several: repeat the flag, or comma-separate (--driver NOR,HAM)")
+    p.add_argument("--limit", type=int, default=None, help="lines (6) or, with --summary, drivers (10)")
+    p.add_argument("--summary", action="store_true", help="per-driver digest of the last laps")
+    p.add_argument("--laps", type=int, default=4, help="summary window in laps (default 4)")
+
     p = sub.add_parser("driver", help="one car in detail")
     p.add_argument("driver")
 
@@ -205,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("mcp", help="run the MCP server on stdio (for other agents)")
 
     p = sub.add_parser("watch", help="deterministic change detection - no model involved")
+    p.add_argument("--loop", action="store_true", help="poll forever at --interval instead of one pass")
+    p.add_argument("--interval", type=int, default=20, help="seconds between passes with --loop (default 20)")
     p.add_argument("--once", action="store_true", default=True, help="one pass (default)")
     p.add_argument("--json", action="store_true", help="machine-readable events")
     p.add_argument("--notify", action="store_true", help="desktop notification when something happens")
@@ -216,6 +359,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="on a flag: full-screen the stopped car's onboard and rewind it; on green: restore",
     )
+
+    p = sub.add_parser("service", help="install the 20s watcher in the platform scheduler")
+    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument("--kind", choices=["systemd", "launchd", "taskscheduler"], default=None,
+                   help="target scheduler (default: this platform)")
+    p.add_argument("--interval", type=int, default=20, help="seconds between passes (default 20)")
+    p.add_argument("--notify", action="store_true", help="also raise a desktop notification")
+    p.add_argument("--dry-run", action="store_true", help="print the unit and commands, change nothing")
 
     p = sub.add_parser("incident", help="frame the stopped car now, manually")
     p.add_argument("--back", type=int, default=30, help="seconds to rewind (default 30)")
@@ -236,6 +387,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "watch":
             return _watch(args)
+        if args.command == "service":
+            from . import service as servicelib
+
+            try:
+                if args.action == "install":
+                    return _out(servicelib.install(
+                        kind=args.kind, interval=args.interval,
+                        notify=args.notify, dry_run=args.dry_run,
+                    ))
+                if args.action == "uninstall":
+                    return _out(servicelib.uninstall(kind=args.kind, dry_run=args.dry_run))
+                return _out(servicelib.status(kind=args.kind))
+            except servicelib.ServiceError as exc:
+                return _out(f"Error: {exc}")
         if args.command == "incident":
             return _incident(args)
         if args.command == "overview":
@@ -259,6 +424,46 @@ def main(argv: list[str] | None = None) -> int:
             return _out(_handler("pitwall_battle")({"window": args.window}))
         if args.command == "strategy":
             return _out(_handler("pitwall_strategy")({"limit": args.limit}))
+        if args.command == "tyres":
+            return _out(_handler("pitwall_tyres")({"limit": args.limit}))
+        if args.command == "fuel":
+            payload = {"limit": args.limit}
+            if args.start_kg is not None:
+                payload["start_kg"] = args.start_kg
+            if args.effect is not None:
+                payload["effect"] = args.effect
+            return _out(_handler("pitwall_fuel")(payload))
+        if args.command == "overtake":
+            payload = {"window": args.window}
+            if args.floor is not None:
+                payload["floor"] = args.floor
+            return _out(_handler("pitwall_overtake")(payload))
+        if args.command == "pitplan":
+            payload = {"limit": args.limit}
+            for key, value in (("driver", args.driver), ("stops", args.stops),
+                               ("pit_loss", args.pit_loss)):
+                if value is not None:
+                    payload[key] = value
+            return _out(_handler("pitwall_pitplan")(payload))
+        if args.command == "undercut":
+            payload = {"window": args.window, "limit": args.limit}
+            if args.pit_loss is not None:
+                payload["pit_loss"] = args.pit_loss
+            return _out(_handler("pitwall_undercut")(payload))
+        if args.command == "windows":
+            return _out(_handler("pitwall_windows")({"limit": args.limit}))
+        if args.command == "outlook":
+            payload = {"limit": args.limit}
+            if args.pit_loss is not None:
+                payload["pit_loss"] = args.pit_loss
+            return _out(_handler("pitwall_outlook")(payload))
+        if args.command == "radio":
+            payload = {"laps": args.laps, "summary": args.summary}
+            if args.limit is not None:
+                payload["limit"] = args.limit
+            if args.driver:
+                payload["driver"] = args.driver
+            return _out(_handler("pitwall_radio")(payload))
         if args.command == "driver":
             return _out(_handler("pitwall_driver")({"driver": args.driver}))
         if args.command == "players":

@@ -4,16 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from pitwall import feed, meeting
+from pitwall import feed, history, meeting
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 @pytest.fixture(autouse=True)
 def isolated_feed_state(monkeypatch, tmp_path):
-    """Keep the persisted freshness digest out of the real ~/.hermes."""
+    """Keep the persisted freshness digest and lap history out of the real ~/.hermes."""
     feed.reset()
     monkeypatch.setattr(feed, "_state_path", lambda: tmp_path / "pitwall-feed.json")
+    monkeypatch.setattr(history, "path", lambda: tmp_path / "pitwall-laps.json")
     yield
     feed.reset()
 

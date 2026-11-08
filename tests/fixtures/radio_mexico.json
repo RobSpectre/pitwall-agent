@@ -1,0 +1,83 @@
+[
+ {
+  "id": 2493689,
+  "driver_number": "23",
+  "transcription": "So wind still very low. I expect it to increase during the race, but now calm conditions.",
+  "player_ts": "2026-11-01T19:51:17.963000Z",
+  "duration_ms": 7432,
+  "channel_id": "1023",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2493691,
+  "driver_number": "87",
+  "transcription": "Radio check",
+  "player_ts": "2026-11-01T19:52:30.231000Z",
+  "duration_ms": 1544,
+  "channel_id": "1014",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2493694,
+  "driver_number": "23",
+  "transcription": "It's just a quick one. Brake balance, I've nudged it another half rearward for lap one.",
+  "player_ts": "2026-11-01T19:52:51.255000Z",
+  "duration_ms": 4680,
+  "channel_id": "1023",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2493695,
+  "driver_number": "23",
+  "transcription": "I think he's struggling with front end and low speed.",
+  "player_ts": "2026-11-01T19:53:03.943000Z",
+  "duration_ms": 4936,
+  "channel_id": "1023",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2493698,
+  "driver_number": "23",
+  "transcription": "Avoiding that, basically.",
+  "player_ts": "2026-11-01T19:53:15.831000Z",
+  "duration_ms": 1832,
+  "channel_id": "1023",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2498323,
+  "driver_number": "50",
+  "transcription": "Track is clear.",
+  "player_ts": "2026-11-01T22:20:03.867000Z",
+  "duration_ms": 1640,
+  "channel_id": "1013",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2498325,
+  "driver_number": "1",
+  "transcription": "Three laps to go.",
+  "player_ts": "2026-11-01T22:20:14.791000Z",
+  "duration_ms": 1992,
+  "channel_id": "1016",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2498327,
+  "driver_number": "44",
+  "transcription": "Three laps to go.",
+  "player_ts": "2026-11-01T22:20:13.415000Z",
+  "duration_ms": 1704,
+  "channel_id": "1007",
+  "f1tv_content_id": "1000010420"
+ },
+ {
+  "id": 2498329,
+  "driver_number": "16",
+  "transcription": "Track is clear. Three laps to go.",
+  "player_ts": "2026-11-01T22:20:14.503000Z",
+  "duration_ms": 2536,
+  "channel_id": "1008",
+  "f1tv_content_id": "1000010420"
+ }
+]

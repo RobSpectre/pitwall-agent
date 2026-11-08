@@ -9,11 +9,16 @@ helpers are the only place a time string is turned into a number.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 #: ``1:14.933`` / ``74.933`` / ``14.9`` -- optional minutes, optional fraction.
 _LAP_RE = re.compile(r"^(?:(\d+):)?(\d{1,2}(?:\.\d+)?)$")
 #: ``00:59:59`` -- the extrapolated session clock.
 _CLOCK_RE = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)$")
+#: ``2026-11-07T19:26:01.01Z`` -- feed timestamps, fraction optional.
+_UTC_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
+)
 
 _EMPTY = {"", "-", "--", "—"}
 
@@ -53,6 +58,35 @@ def parse_clock(value: object) -> float | None:
     hours, minutes, seconds = match.groups()
     try:
         return (int(hours or 0) * 3600) + (int(minutes) * 60) + float(seconds)
+    except ValueError:
+        return None
+
+
+def parse_utc(value: object) -> float | None:
+    """Parse a feed ``Utc`` stamp into epoch seconds.
+
+    The feed is loose about precision -- ``.01`` in one section, ``.5224524``
+    (seven digits) in another -- so the fraction is trimmed to microseconds
+    here rather than handed to ``fromisoformat``.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text in _EMPTY:
+        return None
+    match = _UTC_RE.match(text)
+    if match is None:
+        return None
+    date, clock, frac, zone = match.groups()
+    fraction = (frac or "")[:6].ljust(6, "0")
+    if not zone:
+        zone = "+00:00"
+    elif zone == "Z":
+        zone = "+00:00"
+    elif ":" not in zone:
+        zone = f"{zone[:3]}:{zone[3:]}"
+    try:
+        return datetime.fromisoformat(f"{date}T{clock}.{fraction}{zone}").timestamp()
     except ValueError:
         return None
 

@@ -26,5 +26,10 @@ fi
 [ -n "$PY" ] || PY="$(command -v python3 || true)"
 [ -n "$PY" ] || exit 0
 
-exec env -u PYTHONPATH PYTHONPATH="$PLUGIN" "$PY" -m pitwall.cli watch --once \
-  --react --notify --log "$LOG"
+# Desktop popups are a per-machine preference: PITWALL_NOTIFY=0 in the unit
+# silences them without touching detection, the event log or --react.
+args=(--once --react)
+[ "${PITWALL_NOTIFY:-1}" != "0" ] && args+=(--notify)
+
+exec env -u PYTHONPATH PYTHONPATH="$PLUGIN" "$PY" -m pitwall.cli watch "${args[@]}" \
+  --log "$LOG"

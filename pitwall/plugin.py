@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from . import feed, meeting, players as playerlib, render
-from .tools import MODE_TOOLS, mode_check, specs
+from .tools import MODE_TOOLS, mode_check, radio_report, specs
 
 TOOLSET = "pitwall"
 EMOJI = "\U0001f3c1"  # chequered flag
@@ -58,7 +58,7 @@ def init_report() -> str:
             "  Start MultiViewer, open a session, then run /pitwall init again."
         )
 
-    lines = [f"MultiViewer {label}  {feed.DEFAULT_URI}"]
+    lines = [f"MultiViewer {label}  {feed.uri()}"]
 
     try:
         state = feed.raw_state()
@@ -155,6 +155,32 @@ def _command(raw_args: str, **_kw) -> str:
             )
             layout = playerlib.tile()
             return f"player {player_id} -> {title} (tiled {len(layout)})"
+        except Exception as exc:
+            return f"pitwall: {exc}"
+    if word in {"radio", "radios", "teamradio"}:
+        rest = args[len(word):].split()
+        summarise = False
+        laps, limit = 4, 0
+        who: list[str] = []
+        if rest and rest[0].lower() in {"summary", "sum", "digest"}:
+            summarise = True
+            rest = rest[1:]
+        for token in rest:
+            if token.isdigit():
+                if summarise:
+                    laps = int(token)
+                else:
+                    limit = int(token)
+            else:
+                who.append(token)
+        try:
+            return radio_report(
+                session,
+                driver=who or None,
+                limit=max(1, min(30, limit if limit else (10 if summarise else 6))),
+                summarise=summarise,
+                laps=max(1, min(20, laps)),
+            )
         except Exception as exc:
             return f"pitwall: {exc}"
     if word == "tile":

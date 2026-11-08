@@ -23,8 +23,10 @@ layers and they always come in this order:
 4. **Strategy** — who is about to pit, who is committed, who has to defend.
 
 `/pitwall init` confirms MultiViewer is up, identifies the session, and
-resolves the content id. In a race, `pitwall_race`, `pitwall_battle` and
-`pitwall_strategy` are the tools on offer; the lap-time set is hidden.
+resolves the content id. In a race, `pitwall_race`, `pitwall_battle`,
+`pitwall_strategy`, `pitwall_tyres`, `pitwall_fuel`, `pitwall_overtake`,
+`pitwall_pitplan` and `pitwall_radio` are the tools on offer; the lap-time set
+is hidden.
 
 ## The loop
 
@@ -33,6 +35,14 @@ pitwall_overview    ~90 tokens   clock, laps, track status, latest race control
 pitwall_race       ~1.4 KB       order, interval, last lap, tyre, stops, status
 pitwall_battle      ~200 tokens  every pair inside a second
 pitwall_strategy    ~500 tokens  tyre runs, stops, laps remaining
+pitwall_tyres       ~500 tokens  fitted degradation per car, worst first
+pitwall_fuel        ~400 tokens  the last lap with the fuel load removed
+pitwall_overtake    ~400 tokens  pairs in range, pace delta, projected pass lap
+pitwall_pitplan     ~400 tokens  ranked stop plans from here to the flag
+pitwall_undercut    ~400 tokens  who can win a place in the pit lane
+pitwall_radio       ~300 tokens  team radio as text, cut at the playhead
+pitwall_windows     ~500 tokens  laps left on each set against laps to the flag
+pitwall_outlook     ~400 tokens  projected finishing order from here
 ```
 
 Every turn starts with `pitwall_overview`: the track status and race-control
@@ -63,6 +73,50 @@ P  DRV  INT      LAST       TYRE  STOPS  STATUS
   only appear when they mean something.
 - `*` — the car behind is inside one second, i.e. DRS range.
 - Trailing `R` retired, `S` stopped.
+
+## Radio
+
+`pitwall_radio` is MultiViewer's own transcription of the team-radio clips, not
+ours — the words arrive already written, a second or two behind the audio, and
+the tool never invents a line. It prints the time, the driver, and the quote:
+
+```
+RADIO  Race  LAP 12/71  Mexico City GP / Mexico City  last 3 of 376  cut at 20:12:03
+20:11:54  RUS  "I suggest we introduce lift and coast turn 12."
+20:11:58  LIN  "Make sure we confirm the lift-off and make sure we keep looking at the tyres."
+```
+
+The endpoint returns the whole session at once, so the tool cuts the list at the
+playhead: on a replay you see only what the feed has already reached. Read the
+`cut at` stamp — if it is minutes behind the wall clock, the feed is behind, not
+the radio. Filter with `driver=NOR` when you want one car.
+
+For the conversation rather than the last few calls, ask for the summary:
+`pitwall_radio(summary=true, laps=4)`, `/pitwall radio summary`, or
+`pitwall-agent radio --summary`. It returns every driver who spoke in the last
+four laps, busiest first, with call counts, airtime and their latest lines:
+
+```
+RADIO SUMMARY  Race  LAP 8/71  Mexico City GP / Mexico City  laps 5-8  cut at 20:14:49
+10 drivers, 112 calls, 421.2s of radio, busiest first
+ALB  20 calls  70.3s
+  20:14:34  "Oscar, you're strong, turns 1 to 3."
+  +17 earlier
+```
+
+That is selection and counting, not prose: the plugin has no model, so the
+sentences are yours to write from the digest. `laps=` widens the window, and a
+driver with nine calls shows three — the "+N earlier" is how you know there is
+more without reading it.
+
+When someone asks "what were they saying", summarise: one or two sentences per
+driver who spoke, in their own terms, and no pasted quotes unless a single line
+is the story. A digest read aloud is not a summary, and five verbatim quotes in
+a row is a transcript.
+
+Bracketed fragments like `[D5?]` are the transcriber's uncertainty. Say "he is
+asking for lift and coast", never read the brackets out. Most of the feed is
+"Radio check" and "copy", and a quote is what the team heard, not a fact.
 
 ## Battles
 
@@ -95,9 +149,79 @@ oldest tyres: LEC on 20 laps (hard)
 - `oldest tyres` is the car most exposed to a stop. That is who the broadcast
   watches when the pit window opens.
 - Laps remaining comes from `LapCount`, so it is exact, not estimated.
-- There is no degradation model here. Do not invent a pit lap. Report tyre age,
-  stops made, laps left, and the gap to the car behind — the viewer can see the
-  rest.
+
+## The models — and what they assume
+
+Four tools go beyond what the feed states outright. Each one is an estimate
+built from observed laps, and each one refuses to answer when it lacks the laps
+to fit. Never repeat their numbers as facts: say "the model has him losing two
+tenths a lap", not "his tyres are losing two tenths".
+
+`pitwall_tyres` fits a least-squares line to that car's own laps on its current
+set, with the fuel load already subtracted, and reports seconds lost per lap,
+the cost over the next five laps, and the sample count. Under four laps and the
+slope is not reported at all; under six it carries a `~` and is provisional —
+the early-race fit is track evolution, not tyre life. A slope above about
+0.12 s/lap, or a fit that started late in a stint, is the "he is about to fall
+off the cliff" call.
+
+`pitwall_fuel` removes the fuel penalty: a car starts a race on about 110 kg and
+burns it over the distance, at roughly 0.033 s per kg per lap. That is why a
+1:21 in lap 2 and a 1:19 in lap 40 are the same pace — compare the `EMPTY TANK`
+column, not `LAST`. Both constants are tool arguments if a circuit needs
+different numbers.
+
+`pitwall_overtake` compares recent median pace of adjacent cars and projects:
+laps until DRS, and a pass lap. The floor is 0.12 s/lap — below that a car
+cannot close and pass, it just sits there, and the tool says `holding station`.
+A projected pass lap is arithmetic, not a prediction of traffic, team orders,
+or a driver who defends well.
+
+`pitwall_pitplan` enumerates stop plans from the current lap to the flag, prices
+each one with the compound curves fitted from this session, adds a pit loss of
+21 s per stop (a tool argument) and ranks them. The last line says whether each
+compound's wear was **measured** or is the **book** figure — say which, on air.
+A fit only counts as measured when it has at least six laps in it and an R² of
+0.20 or more; a line through the noise, or a slope pointing the wrong way, is
+priced at the book figure and labelled `book`. That matters most in the first
+third of a race, when the fuel correction and a track still rubbering in will
+happily produce a "wear rate" that explains three percent of the variance.
+If the current set cannot reach the flag the tool says a stop is mandatory and
+stops comparing against staying out, because that comparison would be fiction.
+Otherwise the line that matters is whether staying out is quicker: if it is,
+pitting costs the race.
+
+## The pit window and the likely outcome
+
+`pitwall_undercut` prices the fight in the pit lane. It reports how much the car
+ahead is losing per lap and how many laps of cover it has — `gap / wear rate` —
+so the line is "Pérez has five laps of cover, then the undercut is live", or
+"cannot be undercut before the flag" when the gap is too big for the distance
+left. A pair with the car ahead *gaining* gets `no undercut`; do not dress that
+up as a threat.
+
+`pitwall_windows` is the tyre clock: laps left on each set against laps left in
+the race, the last lap to change it, and every car that cannot reach the flag.
+Read the bottom of the table — a car running out before the flag has a stop
+coming whether the team has called it or not.
+
+`pitwall_outlook` is the likely outcome, not the result. It runs every car to
+the flag on its current tyres, prices any mandatory stop, and starts from the
+current gaps. Three things it does not know: traffic, safety cars, and what the
+other teams are about to do. Say "the model has him ninth", never "he will
+finish ninth".
+
+Intervals are the weak point. The feed does not always publish them, so when it
+does not they are rebuilt by summing every car's recorded laps over the same lap
+window, and the header says `intervals from laps`. A car with a missing lap (a
+deleted one) is left out rather than handed a made-up gap. If the tool says
+`no intervals ... cannot be priced`, that is the rebuild failing, not the race.
+
+All of these need lap history. The feed carries only the current lap per car, so
+`pitwall-agent` records every lap it sees into `~/.hermes/state/pitwall-laps.json`
+— the gateway, the CLI and the 20-second watcher all append to it. If a replay
+is started mid-race, the models stay quiet until enough laps have been
+collected; say "not enough laps yet" rather than guessing.
 
 An undercut is only a story when the gap is small enough to be covered by a
 stop: roughly 20-23 seconds on most circuits. Say "the undercut is live" only

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from pitwall.model import RUN_STATES, build
@@ -134,3 +136,63 @@ def test_missing_mvstatus_falls_back_to_raw_flags(real_state):
     }
     session = build(stripped)
     assert session.by_num["1"].in_pit is True
+
+
+# --- session clock ---------------------------------------------------------
+
+STAMP = "2026-11-07T19:26:01.01Z"
+#: The feed's clock lags its heartbeat by a few seconds in a healthy document.
+BEAT = "2026-11-07T19:26:30Z"
+STAMP_AT = datetime(2026, 11, 7, 19, 26, 1, 10000, tzinfo=timezone.utc).timestamp()
+BEAT_AT = datetime(2026, 11, 7, 19, 26, 30, tzinfo=timezone.utc).timestamp()
+#: Elapsed time the document itself claims, heartbeat against clock stamp.
+FEED_ELAPSED = BEAT_AT - STAMP_AT
+
+
+def clock_state(*, remaining="00:15:36", stamp=STAMP, beat: str | None = BEAT, extrapolating=True):
+    state = {
+        "SessionInfo": {},
+        "ExtrapolatedClock": {"Remaining": remaining, "Utc": stamp, "Extrapolating": extrapolating},
+    }
+    if beat:
+        state["Heartbeat"] = {"Utc": beat}
+    return state
+
+
+def test_clock_runs_on_from_the_feed_snapshot():
+    # 15:36 was stamped at the green light and never re-sent; a minute has passed.
+    session = build(clock_state(), fetched_at=STAMP_AT + 60)
+    assert session.remaining == pytest.approx(936 - 60)
+
+
+def test_clock_ignores_the_wall_clock_when_it_is_hours_out():
+    # A mis-set local clock must not be allowed to zero the session.
+    session = build(clock_state(), fetched_at=STAMP_AT + 4 * 3600)
+    assert session.remaining == pytest.approx(936 - FEED_ELAPSED)
+
+
+def test_clock_uses_the_wall_clock_when_there_is_no_heartbeat():
+    session = build(clock_state(beat=None), fetched_at=STAMP_AT + 60)
+    assert session.remaining == pytest.approx(936 - 60)
+
+
+def test_clock_does_not_run_when_the_feed_stops_extrapolating():
+    # A red flag freezes the clock deliberately; the raw value is the truth.
+    session = build(clock_state(extrapolating=False), fetched_at=STAMP_AT + 300)
+    assert session.remaining == pytest.approx(936)
+
+
+def test_clock_is_raw_without_a_fetch_time():
+    assert build(clock_state()).remaining == pytest.approx(936)
+
+
+def test_clock_never_goes_negative():
+    session = build(clock_state(remaining="00:00:20"), fetched_at=STAMP_AT + 600)
+    assert session.remaining == pytest.approx(0)
+
+
+def test_clock_falls_back_to_the_heartbeat_before_the_stamp():
+    # The document itself says 29 s have passed; a fetch predating its own
+    # timestamp is a clock problem, not a reason to rewind the session.
+    session = build(clock_state(), fetched_at=STAMP_AT - 5)
+    assert session.remaining == pytest.approx(936 - FEED_ELAPSED)

@@ -92,3 +92,10 @@ def test_snapshot_carries_the_data_age(live, q3_state, monkeypatch):
     clock["t"] += 12.0
     session, _ = feed.snapshot(fresh=True)
     assert session.data_age == pytest.approx(12.0)
+
+
+def test_uri_follows_the_environment(monkeypatch):
+    monkeypatch.delenv("MVF1_URI", raising=False)
+    assert feed.uri() == "http://localhost:10101/api/graphql"
+    monkeypatch.setenv("MVF1_URI", "http://10.0.0.5:10101/api/graphql")
+    assert feed.uri() == "http://10.0.0.5:10101/api/graphql"

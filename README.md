@@ -34,6 +34,14 @@ set you have.
 | `pitwall_race` | interval, last lap, tyre and age, stops, status | ~1.4 KB |
 | `pitwall_battle` | every pair inside a second, with the last-lap trend | ~0.2 KB |
 | `pitwall_strategy` | tyre runs, stop count, laps remaining, oldest rubber | ~0.5 KB |
+| `pitwall_tyres` | fitted degradation per car on its current set | ~0.5 KB |
+| `pitwall_fuel` | last lap corrected to an empty tank, and the gap | ~0.4 KB |
+| `pitwall_overtake` | pairs inside a window, pace delta, projected pass lap | ~0.4 KB |
+| `pitwall_pitplan` | ranked one- and two-stop plans from here to the flag | ~0.4 KB |
+| `pitwall_undercut` | pairs who can win a place in the pit lane, and the laps of cover | ~0.4 KB |
+| `pitwall_windows` | laps left on each set, the last lap to change it, who cannot reach the flag | ~0.5 KB |
+| `pitwall_outlook` | projected finishing order from here, and the places it moves | ~0.4 KB |
+| `pitwall_radio` | driver radio as text, newest last, or a per-driver digest over N laps | ~0.3 KB |
 
 **Any session**:
 
@@ -69,12 +77,29 @@ hermes gateway restart     # a running process never switches dependency environ
 into the dependency environment it selected. An installed plugin only upgrades
 when its declared dependency floor changes — hence the `>=2.2` bump below.
 
+## Platforms
+
+The plugin, the CLI and the MCP server are pure Python 3.11+ and speak only to
+MultiViewer's local GraphQL, so they run wherever MultiViewer runs.
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| tools, `/pitwall`, CLI, MCP | yes | yes | yes |
+| 20-second watcher | `service install` → systemd | `service install` → launchd | `service install` → Task Scheduler |
+| desktop notification on an event | `notify-send` | `osascript` | PowerShell toast |
+
+One command puts the watcher on whichever scheduler the machine has
+(`pitwall-agent service install`); the platforms differ in how it is held, not
+in what it does.
+
 Then, in a Hermes session:
 
 ```
 /pitwall init       MultiViewer, session type, content id, which tools apply
 /pitwall            classification
 /pitwall race       race order with tyres and stops
+/pitwall radio      the last team-radio calls, as text
+/pitwall radio summary 6 NOR HAM   per-driver digest over the last six laps
 /pitwall flying     who is on a flyer
 /pitwall players    open windows and the resolved content id
 /pitwall open LEC   new onboard, tiled
@@ -87,9 +112,15 @@ Outside Hermes:
 pip install .                 # or: uv pip install -e ".[dev]"
 pitwall-agent init
 pitwall-agent race --limit 10
+pitwall-agent radio --summary --laps 4 --driver NOR,HAM
 pitwall-agent open LEC --side right --screen 3840x2160
 pitwall-agent mcp             # stdio MCP server
 ```
+
+Player tiling lays windows out on the display you tell it about:
+`--screen 1728x1117`, or once per machine via `PITWALL_SCREEN`. The fallback is
+a 4K desktop, and MultiViewer's GraphQL does not publish a display size to
+derive a better one.
 
 Point an MCP client at it the same way the notebook points at `mvf1-cli mcp`:
 
@@ -138,7 +169,16 @@ printed as nonsense.
 
 **Race.** Tyre age is `TotalLaps − StartLaps` from `TimingAppData`; stops are
 inferred from the number of tyre runs; laps remaining is exact from `LapCount`.
-No degradation model, no invented pit lap.
+Degradation is a least-squares fit on that car's own fuel-corrected laps on its
+current set, and it is only called **measured** with six or more laps, a
+positive slope and an R² of at least 0.20 — otherwise the plan is priced on the
+book figure and labelled `book`. Pit plans enumerate stop laps against the flag
+and rank them on total race time, so a "target lap" is an optimum, not a guess.
+
+**Radio.** MultiViewer publishes an AI transcription of each team-radio clip;
+the tool reads it from the same backend the app uses, cuts it at the playhead so
+a replay cannot show radio from laps it has not reached, and prints it as text.
+No audio is downloaded and no speech-to-text runs here.
 
 **Cheap polling.** Fetches are cached for one second so a burst of calls costs
 one request, and `pitwall_board(only_changes=true)` diffs against the previous
@@ -177,19 +217,31 @@ Noise control is deliberate: personal bests only for the top five or anyone
 within half a second of pole, and the drop zone only for the cars around the
 cutoff. Everything else stays in the state file.
 
-`deploy/` carries a 20-second `systemd --user` timer:
+One command installs it, on whichever scheduler the machine has:
 
 ```bash
-cp ~/.hermes/plugins/pitwall-agent/deploy/pitwall-watch.* ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now pitwall-watch.timer
-systemctl --user list-timers pitwall-watch.timer
+pitwall-agent service install        # systemd, launchd or Task Scheduler
+pitwall-agent service status
+pitwall-agent service uninstall
+pitwall-agent service install --dry-run --kind launchd   # print the unit, write nothing
 ```
 
-The launcher resolves Hermes's currently selected dependency environment
-instead of hard-coding a venv path, and exits quietly when MultiViewer is
-closed. `hermes`'s own cron ticks once a minute, which is why the 20-second
-cadence runs on a systemd timer.
+| platform | what gets installed | how the cadence is held |
+|---|---|---|
+| Linux | `~/.config/systemd/user/pitwall-watch.{service,timer}` | one pass every 20 s |
+| macOS | `~/Library/LaunchAgents/io.pitwall.watch.plist` | a kept-alive `watch --loop --interval 20` |
+| Windows | a Task Scheduler task, triggered at logon | a kept-alive `watch --loop --interval 20` |
+
+Linux keeps the one-shot-per-tick model. macOS and Windows run a kept-alive
+process instead, because launchd's `StartInterval` is wall-clock and Task
+Scheduler cannot go below a minute. Every unit runs the interpreter that ran
+`service install` — re-run it after a Hermes upgrade moves that venv.
+`watch --loop` holds a single-instance lock, and a timer tick that lands while a
+loop is running is skipped rather than double-logged. `hermes`'s own cron ticks
+once a minute, which is why the cadence needs its own scheduler.
+
+`deploy/` still holds the original bash launcher and units for anyone who would
+rather copy them by hand.
 
 ## Incident reaction
 
@@ -249,6 +301,8 @@ pitwall/
   cli.py             pitwall-agent command line
   mcp.py             fastmcp server for other agents
   watch.py           deterministic change detection (no model)
+  history.py         rolling per-lap timing store (the feed only has the current lap)
+  race.py            degradation, fuel correction, overtake and pit-plan models
   fixtures.py        fixture generator
 deploy/              systemd service + 20s timer + launcher
 skills/

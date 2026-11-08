@@ -251,6 +251,9 @@ def detect(session: Session, previous: dict) -> tuple[list[Event], dict]:
         "best": {d.num: round(d.best_lap, 3) for d in session.drivers if d.best_lap},
         "zone": sorted(zone_now),
         "knocked": [d.num for d in session.drivers if d.knocked_out],
+        # Cars already not running, so the next flag can tell the car that
+        # caused it from the ones that have been parked since before it.
+        "stopped": sorted(d.num for d in session.drivers if d.stopped or d.stationary),
         "rc": sorted(
             {_sig(m.get("Utc"), m.get("Message")) for m in session.messages if _classify_message(m)}
         )[-60:],
@@ -278,7 +281,7 @@ def scan(*, path: Path | None = None, react: bool = False) -> list[Event]:
         from . import incident
 
         if incident.is_flag(session):
-            line, marker = incident.react(session, marker)
+            line, marker = incident.react(session, marker, previous.get("stopped") or ())
             if line:
                 events.append(Event(HIGH, line, _sig("incident", session.key, session.track, line)))
         elif marker.get("player"):

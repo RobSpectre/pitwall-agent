@@ -279,3 +279,12 @@ def test_every_schema_is_well_formed():
         assert schema["name"] == name
         assert schema["description"]
         assert schema["parameters"]["type"] == "object"
+
+
+def test_screen_comes_from_the_flag_then_the_environment(monkeypatch):
+    monkeypatch.delenv("PITWALL_SCREEN", raising=False)
+    assert tools._screen(None) == (3840, 2160)          # the documented fallback
+    monkeypatch.setenv("PITWALL_SCREEN", "1728x1117")
+    assert tools._screen(None) == (1728, 1117)
+    assert tools._screen("2560x1440") == (2560, 1440)   # the flag wins
+    assert tools._screen("nonsense") == (3840, 2160)

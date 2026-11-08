@@ -6,6 +6,8 @@ Documentation=https://github.com/RobSpectre/pitwall-agent
 Type=oneshot
 # The detector writes its own state and event log; nothing here needs a shell.
 ExecStart=%h/.hermes/plugins/pitwall-agent/deploy/watch-once.sh
+# Desktop popups are opt-in per machine; the event log and --react still run.
+Environment=PITWALL_NOTIFY=0
 # A hung feed must not wedge the timer.
 TimeoutStartSec=45
 Nice=5

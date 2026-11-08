@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .timefmt import parse_clock, parse_time
+from .timefmt import parse_clock, parse_time, parse_utc
 
 # --- broadcast constants ---------------------------------------------------
 #
@@ -52,6 +52,43 @@ COMPOUNDS = {
 }
 
 RUN_STATES = ("PUSH", "BUILD", "COOL", "LAP", "OUT", "PIT", "STOPPED", "RETIRED", "DONE", "NONE")
+
+#: How far the local wall clock may run ahead of the feed's own heartbeat before
+#: it is treated as mis-set.  The gap below this is just delivery lag.
+CLOCK_LAG_LIMIT = 180.0
+
+
+def _remaining(state: dict, fetched_at: float) -> float | None:
+    """Session time left in seconds, extrapolated from the feed's clock snapshot.
+
+    ``ExtrapolatedClock`` is a snapshot, not a counter: the feed sends
+    ``Remaining`` with a ``Utc`` stamp and expects the client to run it from
+    there.  Between sends the raw value sits still -- after a red-flag restart
+    it can be several minutes behind -- so a pole-clock verdict read straight
+    off it is wrong exactly when it matters.
+    """
+    clock = state.get("ExtrapolatedClock") or {}
+    remaining = parse_clock(clock.get("Remaining"))
+    if remaining is None:
+        return None
+    extrapolating = clock.get("Extrapolating")
+    if fetched_at <= 0 or not (extrapolating is True or str(extrapolating).lower() == "true"):
+        return remaining
+    stamp = parse_utc(clock.get("Utc"))
+    if stamp is None:
+        return remaining
+
+    elapsed = max(0.0, fetched_at - stamp)
+    beat = parse_utc((state.get("Heartbeat") or {}).get("Utc"))
+    if beat is not None:
+        # The heartbeat is the feed's own "now" when the document was built: it
+        # cannot overstate elapsed time, but it lags real time by however long
+        # delivery took.  Keep the wall clock only while it agrees with the feed
+        # to within that lag -- a clock hours out must not zero the session.
+        feed_elapsed = max(0.0, beat - stamp)
+        if not feed_elapsed <= elapsed <= feed_elapsed + CLOCK_LAG_LIMIT:
+            elapsed = feed_elapsed
+    return max(0.0, remaining - elapsed)
 
 
 @dataclass(slots=True)
@@ -156,6 +193,18 @@ class Driver:
         return not (self.in_pit or self.retired or self.stopped)
 
     @property
+    def pitted(self) -> bool:
+        """In the pit lane or garage rather than out on the circuit.
+
+        ``in_pit`` is the feed's own flag and is authoritative when it is set.
+        A car parked at the pit exit never gets it -- it carries ``pit_out`` for
+        the whole outlap -- so a stationary car with ``pit_out`` counts too.
+        Without that, a car sitting in the pit lane with a stale ``Stopped``
+        flag outranks the car that actually crashed.
+        """
+        return self.in_pit or (self.pit_out and self.stationary)
+
+    @property
     def flying(self) -> bool:
         return self.run == "PUSH"
 
@@ -192,6 +241,15 @@ class Session:
     radio: list[dict]
     fetched_at: float
     archive: str = ""
+    meeting_key: int | None = None   # SessionInfo.Meeting.Key, for the radio lookup
+    #: The last moment the feed has actually reached, in session time. Taken
+    #: from the freshest timestamped section (car data beats race control,
+    #: which only speaks when something happens). ``None`` if the document has
+    #: no stamps at all.
+    playhead_utc: float | None = None
+    #: ``(epoch seconds, lap number)`` for each lap start published by
+    #: ``SessionData.Series``. Empty when the feed does not publish lap stamps.
+    lap_stamps: list[tuple[float, int]] = field(default_factory=list)
     total_laps: int | None = None
     current_lap: int | None = None
     mode: str = "unknown"          # practice | qualifying | race | unknown
@@ -277,6 +335,28 @@ def _sectors(line: dict) -> list[Sector]:
     while len(out) < 3:
         out.append(Sector(None, False, False, 0))
     return out
+
+
+def _first_time(*values: object) -> float | None:
+    """The first of ``values`` that parses as a time.
+
+    Practice and qualifying publish ``TimeDiff*``; a race publishes
+    ``GapToLeader`` and ``IntervalToPositionAhead`` under different names. Read
+    both: a race parsed through the practice fields loses every interval, and
+    the table silently renders ``-`` for all 22 cars.
+    """
+    for value in values:
+        parsed = parse_time(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _interval_value(value: object) -> object:
+    """``IntervalToPositionAhead`` is ``{Value, Catching}`` in a race."""
+    if isinstance(value, dict):
+        return value.get("Value")
+    return value
 
 
 def _stints(entry: dict) -> list[Stint]:
@@ -441,11 +521,59 @@ def find_driver(session: Session, needle: object) -> Driver | None:
     return None
 
 
+def _playhead(state: dict) -> float | None:
+    """The newest session-time stamp in the document.
+
+    Race control is the obvious source and the worst one for this job: it goes
+    quiet for whole green-flag runs, so cutting at the last message would hide
+    radio from the last ten minutes. Car-data frames land twice a second, so
+    they are asked first; position frames, lap stamps and radio captures fill
+    in when they are absent.
+    """
+    stamps: list[float | None] = []
+    entries = (state.get("CarData") or {}).get("Entries") or []
+    if entries:
+        stamps.append(parse_utc(entries[-1].get("Utc")))
+    frames = (state.get("Position") or {}).get("Position") or []
+    if frames:
+        stamps.append(parse_utc(frames[-1].get("Timestamp")))
+    series = (state.get("SessionData") or {}).get("Series") or []
+    if series:
+        stamps.append(parse_utc(series[-1].get("Utc")))
+    for item in (state.get("RaceControlMessages") or {}).get("Messages") or []:
+        stamps.append(parse_utc(item.get("Utc")))
+    for item in (state.get("TeamRadio") or {}).get("Captures") or []:
+        stamps.append(parse_utc(item.get("Utc")))
+    known = [stamp for stamp in stamps if stamp is not None]
+    return max(known) if known else None
+
+
+def _lap_stamps(state: dict) -> list[tuple[float, int]]:
+    """Each lap start the feed has published, oldest first."""
+    out: list[tuple[float, int]] = []
+    for item in (state.get("SessionData") or {}).get("Series") or []:
+        if not isinstance(item, dict):
+            continue
+        when = parse_utc(item.get("Utc"))
+        raw_lap = item.get("Lap")
+        if when is None or not isinstance(raw_lap, (int, str)) or not str(raw_lap).isdigit():
+            continue
+        out.append((when, int(raw_lap)))
+    out.sort()
+    return out
+
+
 def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
           data_age: float = 0.0) -> Session:
     """Build a :class:`Session` from an ``F1LiveTimingState`` document."""
     info = state.get("SessionInfo") or {}
     meeting = (info.get("Meeting") or {}).get("Name") or "Unknown meeting"
+    raw_meeting_key = (info.get("Meeting") or {}).get("Key")
+    meeting_key = (
+        int(raw_meeting_key)
+        if isinstance(raw_meeting_key, (int, str)) and str(raw_meeting_key).isdigit()
+        else None
+    )
     circuit = ((info.get("Meeting") or {}).get("Circuit") or {}).get("ShortName") or ""
 
     timing = ((state.get("TimingData") or {}).get("Lines")) or {}
@@ -510,8 +638,10 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
             best_lap=parse_time((line.get("BestLapTime") or {}).get("Value")),
             best_lap_no=_best_lap_number(line),
             laps=int(_num(line.get("NumberOfLaps")) or 0),
-            gap_leader=parse_time(line.get("TimeDiffToFastest")),
-            gap_ahead=parse_time(line.get("TimeDiffToPositionAhead")),
+            gap_leader=_first_time(line.get("TimeDiffToFastest"), line.get("GapToLeader")),
+            gap_ahead=_first_time(
+                line.get("TimeDiffToPositionAhead"), _interval_value(line.get("IntervalToPositionAhead"))
+            ),
             in_pit=_flag(mv, line, "InPit"),
             pit_out=_flag(mv, line, "PitOut"),
             stopped=_flag(mv, line, "Stopped"),
@@ -563,7 +693,6 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
 
     weather = state.get("WeatherData") or {}
     track = state.get("TrackStatus") or {}
-    clock = state.get("ExtrapolatedClock") or {}
     status = state.get("SessionStatus") or {}
     archive = ((state.get("ArchiveStatus") or {}).get("Status")) or ""
     current_lap, total_laps = _lap_count(state)
@@ -575,7 +704,7 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
         name=str(info.get("Name") or ""),
         kind=str(info.get("Type") or ""),
         part=_session_part(state),
-        remaining=parse_clock(clock.get("Remaining")),
+        remaining=_remaining(state, fetched_at),
         status=str(status.get("Status") or ""),
         track=TRACK_STATUS.get(str(track.get("Status") or ""), str(track.get("Message") or "")),
         track_message=str(track.get("Message") or ""),
@@ -595,6 +724,9 @@ def build(state: dict, *, fetched_at: float = 0.0, mode: str | None = None,
         radio=list((state.get("TeamRadio") or {}).get("Captures") or ()),
         fetched_at=fetched_at,
         archive=archive,
+        meeting_key=meeting_key,
+        playhead_utc=_playhead(state),
+        lap_stamps=_lap_stamps(state),
         total_laps=total_laps,
         current_lap=current_lap,
         mode=mode or "unknown",

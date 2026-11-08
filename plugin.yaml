@@ -1,8 +1,9 @@
 name: pitwall-agent
-version: 0.2.1
+version: 0.4.0
 description: AI pit wall for MultiViewer - compact live-timing reads and video control for any broadcast agent.
 license: MIT
 author: Pitwall contributors
+platforms: [linux, macos, windows]
 python_dependencies:
   - "mvf1>=2.2,<3"
 tags: [motorsport, f1, multiviewer, broadcast, timing, qualifying, race, mcp]
@@ -16,6 +17,14 @@ provides_tools:
   - pitwall_race
   - pitwall_battle
   - pitwall_strategy
+  - pitwall_tyres
+  - pitwall_fuel
+  - pitwall_overtake
+  - pitwall_pitplan
+  - pitwall_undercut
+  - pitwall_windows
+  - pitwall_outlook
+  - pitwall_radio
   - pitwall_driver
   - pitwall_players
   - pitwall_player_open
@@ -26,3 +35,7 @@ config_schema:
     type: str
     default: "http://localhost:10101/api/graphql"
     description: MultiViewer GraphQL endpoint. Also read from MVF1_URI.
+  screen:
+    type: str
+    default: "3840x2160"
+    description: Display to lay players out on, WxH in pixels. Also read from PITWALL_SCREEN.

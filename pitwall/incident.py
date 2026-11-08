@@ -81,12 +81,19 @@ def ensure_synced(player_id: int) -> str:
         return f"sync to {title} failed ({type(exc).__name__})"
 
 
-def candidates(session: Session) -> list[Driver]:
-    """Cars that are not running, strongest evidence first, front of the field first."""
+def candidates(session: Session, already_stopped=()) -> list[Driver]:
+    """Cars that are not running, strongest evidence first, front of the field first.
+
+    Cars in the pit lane or garage are never candidates: the flag is about the
+    circuit.  A car that was already parked before this pass is demoted rather
+    than dropped -- it is evidence the feed is lagging on the car that actually
+    stopped, not the incident itself.
+    """
+    parked = {str(num) for num in already_stopped}
     ranked: list[tuple[int, int, Driver]] = []
     for driver in session.drivers:
-        if driver.in_pit or driver.retired:
-            continue          # a car in the garage is not the incident
+        if driver.pitted or driver.retired:
+            continue          # a car in the garage or pit lane is not the incident
         score = 0
         if driver.off_track:
             score += 4        # Position says OffTrack: the clearest signal
@@ -95,13 +102,15 @@ def candidates(session: Session) -> list[Driver]:
         if driver.stationary:
             score += 2        # coordinates identical across two frames
         if score:
+            if driver.num in parked:
+                score -= 5    # stopped before the flag: someone else caused it
             ranked.append((score, driver.position or 99, driver))
     ranked.sort(key=lambda item: (-item[0], item[1]))
     return [driver for _score, _pos, driver in ranked]
 
 
-def pick(session: Session) -> Driver | None:
-    found = candidates(session)
+def pick(session: Session, already_stopped=()) -> Driver | None:
+    found = candidates(session, already_stopped)
     return found[0] if found else None
 
 
@@ -237,7 +246,7 @@ def restore(player_id: int) -> str:
     return f"player {player_id}: " + ", ".join(parts or ["nothing to do"])
 
 
-def react(session: Session, previous: dict) -> tuple[str | None, dict]:
+def react(session: Session, previous: dict, already_stopped=()) -> tuple[str | None, dict]:
     """One flag episode. Returns (report line or None, updated marker)."""
     marker = dict(previous or {})
     if not is_flag(session):
@@ -245,7 +254,7 @@ def react(session: Session, previous: dict) -> tuple[str | None, dict]:
     if marker.get("player") is not None:
         return None, marker      # already framed this episode
 
-    driver = pick(session)
+    driver = pick(session, already_stopped)
     if driver is None:
         return None, marker      # nothing stopped yet; try again next pass
 

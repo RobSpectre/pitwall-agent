@@ -106,6 +106,36 @@ def test_a_car_in_the_pits_is_never_the_incident():
     assert incident.pick(session) is None
 
 
+def test_a_car_parked_at_the_pit_exit_is_not_the_incident():
+    # It never carries InPit -- PitOut stays set for the whole outlap -- so a
+    # stale Stopped flag on a car sitting there used to win the pick.
+    session = session_with(**{
+        "16": {"stopped": True, "stationary": True, "pit_out": True},
+        "81": {"off_track": True},
+    })
+    assert incident.pick(session).label == "PIA"
+
+
+def test_an_outlap_car_is_still_a_candidate():
+    session = session_with(**{"16": {"off_track": True, "pit_out": True}})
+    assert incident.pick(session).label == "LEC"
+
+
+def test_a_car_parked_before_the_flag_loses_to_the_one_that_just_stopped():
+    # LIN has the stronger flags but was already stationary last pass; CAM is
+    # the car that has only just come to a stop.
+    session = session_with(**{
+        "16": {"stopped": True, "stationary": True},
+        "81": {"stationary": True},
+    })
+    assert incident.pick(session, already_stopped=["16"]).label == "PIA"
+
+
+def test_already_stopped_does_not_hide_the_only_candidate():
+    session = session_with(**{"16": {"stopped": True}})
+    assert incident.pick(session, already_stopped=["16"]).label == "LEC"
+
+
 def test_nothing_stopped_means_no_pick():
     assert incident.pick(session_with()) is None
 

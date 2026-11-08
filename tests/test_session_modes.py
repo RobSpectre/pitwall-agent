@@ -91,6 +91,57 @@ def test_pace_table_uses_the_current_run(race_state):
     assert "M14" in text
 
 
+def test_race_intervals_use_the_race_field_names():
+    """A live race publishes GapToLeader / IntervalToPositionAhead, not TimeDiff*."""
+    state = {
+        "SessionInfo": {
+            "Key": 7, "Type": "Race", "Name": "Race",
+            "Meeting": {"Key": 1, "Name": "Test", "Circuit": {"ShortName": "Test"}},
+        },
+        "LapCount": {"CurrentLap": "5", "TotalLaps": "71"},
+        "TimingData": {
+            "Lines": {
+                "16": {
+                    "RacingNumber": "16", "Position": "1", "NumberOfLaps": 4,
+                    "GapToLeader": "LAP 5", "IntervalToPositionAhead": {"Value": "LAP 5", "Catching": False},
+                    "LastLapTime": {"Value": "1:20.834"},
+                    "MVStatus": {"InPit": False, "PitOut": False, "Stopped": False},
+                },
+                "3": {
+                    "RacingNumber": "3", "Position": "2", "NumberOfLaps": 4,
+                    "GapToLeader": "+1.633", "IntervalToPositionAhead": {"Value": "+1.633", "Catching": False},
+                    "LastLapTime": {"Value": "1:21.005"},
+                    "MVStatus": {"InPit": False, "PitOut": False, "Stopped": False},
+                },
+                "44": {
+                    "RacingNumber": "44", "Position": "3", "NumberOfLaps": 4,
+                    "GapToLeader": "+2.633", "IntervalToPositionAhead": {"Value": "+1.000", "Catching": True},
+                    "LastLapTime": {"Value": "1:21.133"},
+                    "MVStatus": {"InPit": False, "PitOut": False, "Stopped": False},
+                },
+            }
+        },
+        "DriverList": {
+            "16": {"Tla": "LEC", "FullName": "Charles Leclerc"},
+            "3": {"Tla": "VER", "FullName": "Max Verstappen"},
+            "44": {"Tla": "HAM", "FullName": "Lewis Hamilton"},
+        },
+    }
+    session = build(state, mode="race")
+    assert session.by_num["16"].gap_leader is None      # "LAP 5" is not a gap
+    assert session.by_num["44"].gap_leader == pytest.approx(2.633)
+    assert session.by_num["44"].gap_ahead == pytest.approx(1.000)
+
+    text = render.race(session)
+    assert "+1.633" in text and "+1.000" in text
+    assert "none inside" not in render.battle(session)
+
+    board = render.board(session)
+    assert "GAP" in board
+    assert "+2.633" in board          # to the leader, not to pole
+    assert board.index("LEC") < board.index("VER") < board.index("HAM")
+
+
 # --- meeting resolution ----------------------------------------------------
 
 

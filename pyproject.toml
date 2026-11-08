@@ -1,6 +1,6 @@
 [project]
 name = "pitwall-agent"
-version = "0.2.1"
+version = "0.4.0"
 description = "AI pit wall for MultiViewer: compact live-timing reads and video control for broadcast agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -10,6 +10,7 @@ keywords = ["f1", "motorsport", "multiviewer", "broadcast", "hermes-plugin", "mc
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Topic :: Games/Entertainment",
 ]
 dependencies = ["mvf1>=2.2,<3"]

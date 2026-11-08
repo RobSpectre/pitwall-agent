@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from .meeting import mode_of
+from . import history
 from .model import Session, build
 
 DEFAULT_URI = "http://localhost:10101/api/graphql"
@@ -34,6 +35,16 @@ _PREVIOUS: Session | None = None
 _PREVIOUS_AT = 0.0
 
 
+def uri() -> str:
+    """The GraphQL endpoint in use: ``MVF1_URI`` if set, else this machine.
+
+    Worth asking rather than assuming: a Hermes running on another host, a
+    second machine on the LAN, or a non-default port all live in this variable,
+    and `init` should print the endpoint it actually reached.
+    """
+    return os.environ.get("MVF1_URI") or DEFAULT_URI
+
+
 def _client():
     global _CLIENT
     if _CLIENT is None:
@@ -48,8 +59,7 @@ def _client():
                 "the gateway (`hermes gateway restart`) so the new dependency environment "
                 "is used — a running process never switches environments."
             ) from exc
-        uri = os.environ.get("MVF1_URI") or DEFAULT_URI
-        _CLIENT = MultiViewerForF1(uri=uri)
+        _CLIENT = MultiViewerForF1(uri=uri())
     return _CLIENT
 
 
@@ -67,7 +77,7 @@ def raw_state(*, fresh: bool = False) -> dict:
         raise
     except Exception as exc:
         raise PitwallError(
-            f"MultiViewer is not reachable at {os.environ.get('MVF1_URI') or DEFAULT_URI} "
+            f"MultiViewer is not reachable at {uri()} "
             f"({type(exc).__name__}: {exc}). Start MultiViewer and open a session."
         ) from exc
 
@@ -162,6 +172,9 @@ def snapshot(*, fresh: bool = False) -> tuple[Session, Session | None]:
     state = raw_state(fresh=fresh)
     now = time.time()
     session = build(state, fetched_at=now, mode=mode_of(state), data_age=data_age())
+    # Every read is also a sample: the document only carries the current lap,
+    # so the trends (degradation, fuel-corrected pace) are built here.
+    history.record(session)
     with _LOCK:
         previous = _PREVIOUS
         _PREVIOUS = session

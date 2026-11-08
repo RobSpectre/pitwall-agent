@@ -11,10 +11,11 @@ Handlers return plain strings -- no JSON punctuation, no URLs, no debug fields.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from . import feed, players as playerlib, render
+from . import feed, players as playerlib, race, radio, render
 from .meeting import MeetingError
 from .model import Session, find_driver
 from .timefmt import fmt_lap
@@ -25,9 +26,9 @@ RACE = frozenset({"race"})
 
 #: What /pitwall init advertises for each mode.
 MODE_TOOLS = {
-    "practice": "flying, pace",
-    "qualifying": "flying, purple, pole, pace",
-    "race": "race, battle, strategy",
+    "practice": "flying, pace, radio",
+    "qualifying": "flying, purple, pole, pace, radio",
+    "race": "race, battle, strategy, tyres, fuel, overtake, pitplan, undercut, windows, outlook, radio",
     "unknown": "every set (session not identified)",
 }
 
@@ -56,7 +57,14 @@ def _float(value: Any, default: float) -> float:
 
 
 def _screen(value: Any) -> tuple[int, int]:
-    text = str(value or "3840x2160").lower().replace(" ", "")
+    """The display to lay players out on, in pixels.
+
+    Order: the explicit argument, then ``PITWALL_SCREEN``, then a 4K desktop.
+    The default is a guess -- MultiViewer's GraphQL exposes ``platform`` and
+    ``arch`` but not a display size -- so anyone on a laptop must say so once
+    (``--screen 1728x1117``) rather than discover their players off-screen.
+    """
+    text = str(value or os.environ.get("PITWALL_SCREEN") or "3840x2160").lower().replace(" ", "")
     try:
         width, height = text.split("x", 1)
         return max(320, int(width)), max(240, int(height))
@@ -189,6 +197,163 @@ def _battle(args: dict, **_kw: Any) -> str:
 def _strategy(args: dict, **_kw: Any) -> str:
     try:
         return render.strategy(_session(args), limit=_int(args.get("limit"), 10, 1, 22))
+    except Exception as exc:
+        return _err(exc)
+
+
+def _tyres(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        return render.tyres(
+            session,
+            race.degradation(session),
+            limit=_int(args.get("limit"), 12, 1, 22),
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def _fuel(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        effect = _float(args.get("effect"), race.FUEL_EFFECT)
+        start_kg = _float(args.get("start_kg"), race.FUEL_START_KG)
+        return render.fuel(
+            session,
+            race.fuel_pace(session, fuel_effect=effect, start_kg=start_kg),
+            limit=_int(args.get("limit"), 12, 1, 22),
+            start_kg=start_kg,
+            effect=effect,
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def _overtake(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        window = _float(args.get("window"), 2.0)
+        floor = _float(args.get("floor"), race.MIN_DELTA)
+        return render.overtakes(
+            session,
+            race.overtakes(session, window=window, floor=floor),
+            window=window,
+            floor=floor,
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def _pitplan(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        driver = find_driver(session, args.get("driver")) if args.get("driver") else None
+        if driver is None and args.get("driver"):
+            known = ", ".join(d.label for d in session.drivers)
+            return f"Error: no driver matching {args.get('driver')!r}. Known: {known}"
+        if driver is None:
+            leading = [d for d in session.sorted_by_pace() if d.position]
+            if not leading:
+                return "Error: no classified car to plan for"
+            driver = leading[0]
+        loss = _float(args.get("pit_loss"), race.PIT_LOSS)
+        wanted = args.get("stops")
+        counts = [_int(wanted, 1, 1, 2)] if wanted else [1, 2]
+        found = []
+        for count in counts:
+            found += race.plans(session, driver, stops=count, pit_loss=loss)
+        found.sort(key=lambda plan: plan.total)
+        found = found[: _int(args.get("limit"), 3, 1, 5)]
+        if found:
+            best = found[0].total
+            for plan in found:
+                plan.vs_best = round(plan.total - best, 1)
+        return render.pitplan(session, driver, found, pit_loss=loss)
+    except Exception as exc:
+        return _err(exc)
+
+
+def _undercut(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        loss = _float(args.get("pit_loss"), race.PIT_LOSS)
+        window = _float(args.get("window"), 25.0)
+        return render.undercut(
+            session,
+            race.undercut(session, pit_loss=loss, window=window),
+            pit_loss=loss,
+            limit=_int(args.get("limit"), 8, 1, 22),
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def _windows(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        return render.windows(
+            session,
+            race.windows(session),
+            limit=_int(args.get("limit"), 12, 1, 22),
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def _outlook(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        loss = _float(args.get("pit_loss"), race.PIT_LOSS)
+        return render.outlook(
+            session,
+            race.outlook(session, pit_loss=loss),
+            limit=_int(args.get("limit"), 10, 1, 22),
+        )
+    except Exception as exc:
+        return _err(exc)
+
+
+def radio_report(
+    session: Session,
+    *,
+    driver: object = None,
+    limit: int = 6,
+    summarise: bool = False,
+    laps: int = 4,
+    refresh: bool = False,
+) -> str:
+    """Radio as text: the last few calls, or a per-driver digest of recent laps.
+
+    One place, so the tool, ``/pitwall radio`` and the CLI cannot drift apart.
+    """
+    if summarise:
+        asked = [item.label for item in radio.resolve(session, driver)]
+        groups, window = radio.summary(session, driver=driver, laps=laps, refresh=refresh)
+        return render.radio_summary(
+            session,
+            groups[:max(1, limit)],
+            window=window,
+            wanted=asked or None,
+        )
+    lines, published, cut = radio.recent(
+        session, driver=driver, limit=limit, refresh=refresh
+    )
+    return render.radio(session, lines, total=published, cut=cut)
+
+
+def _radio(args: dict, **_kw: Any) -> str:
+    try:
+        session = _session(args)
+        summarise = bool(args.get("summary"))
+        return radio_report(
+            session,
+            driver=args.get("driver"),
+            # A summary is a list of drivers, not of lines, so it wants more room.
+            limit=_int(args.get("limit"), 10 if summarise else 6, 1, 30),
+            summarise=summarise,
+            laps=_int(args.get("laps"), 4, 1, 20),
+            refresh=bool(args.get("fresh")),
+        )
     except Exception as exc:
         return _err(exc)
 
@@ -372,8 +537,10 @@ def specs() -> list[ToolSpec]:
             {
                 "name": "pitwall_board",
                 "description": (
-                    "Compact classification: position, driver, best lap, gap to pole, laps, run state "
+                    "Compact classification: position, driver, best lap, gap, laps, run state "
                     "(PUSH/BUILD/COOL/LAP/OUT/PIT), live sector colours, drop-zone markers. "
+                    "In a race the gap is to the leader and the order is the classification; "
+                    "in practice and qualifying it is a pace board, gap to pole. "
                     "Set only_changes=true to get just what moved since your previous call."
                 ),
                 "parameters": {
@@ -505,6 +672,184 @@ def specs() -> list[ToolSpec]:
             },
             _strategy,
             RACE,
+        ),
+        ToolSpec(
+            "pitwall_tyres",
+            {
+                "name": "pitwall_tyres",
+                "description": (
+                    "Tyre degradation: for each car's current set, the fitted loss per lap in "
+                    "seconds (fuel removed), the cost over the next five laps, and how many clean "
+                    "laps the fit is built on. Worst tyres first."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "description": "Rows to show (default 12)."}},
+                },
+            },
+            _tyres,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_fuel",
+            {
+                "name": "pitwall_fuel",
+                "description": (
+                    "Fuel-corrected pace: each car's last lap, the same lap with the fuel load "
+                    "removed, and the gap to the best corrected lap. Use it to compare raw times "
+                    "early in a stint and late in a race."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "start_kg": {"type": "number", "description": "Fuel load at the start (default 110)."},
+                        "effect": {"type": "number", "description": "Seconds per kg per lap (default 0.033)."},
+                        "limit": {"type": "integer", "description": "Rows to show (default 12)."},
+                    },
+                },
+            },
+            _fuel,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_overtake",
+            {
+                "name": "pitwall_overtake",
+                "description": (
+                    "Overtake watch: every pair inside `window` seconds with the pace delta from "
+                    "recent laps, DRS state, laps until DRS and a projected pass lap."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "window": {"type": "number", "description": "Maximum interval in seconds (default 2.0)."},
+                        "floor": {
+                            "type": "number",
+                            "description": "Pace advantage needed to pass, s/lap (default 0.12).",
+                        },
+                    },
+                },
+            },
+            _overtake,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_pitplan",
+            {
+                "name": "pitwall_pitplan",
+                "description": (
+                    "Optimal pit strategy for one car (default: the leader): ranked one- and two-stop "
+                    "plans from here to the flag, the modelled total, the cost of each alternative and "
+                    "what staying out would cost."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "driver": {"type": "string", "description": "Three-letter code or racing number."},
+                        "stops": {"type": "integer", "description": "Force a stop count (1 or 2)."},
+                        "pit_loss": {"type": "number", "description": "Seconds a stop costs (default 21.0)."},
+                        "limit": {"type": "integer", "description": "Plans to show (default 3)."},
+                    },
+                },
+            },
+            _pitplan,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_undercut",
+            {
+                "name": "pitwall_undercut",
+                "description": (
+                    "Undercut watch: adjacent pairs inside the pit-loss window, the rate the car ahead "
+                    "is losing per lap, how many laps of cover it has, and whether a stop now would "
+                    "rejoin ahead. Intervals come from the feed or from lap history."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pit_loss": {"type": "number", "description": "Seconds a stop costs (default 21.0)."},
+                        "window": {"type": "number", "description": "Only pairs within this gap (default 25.0)."},
+                        "limit": {"type": "integer", "description": "Pairs to show (default 8)."},
+                    },
+                },
+            },
+            _undercut,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_windows",
+            {
+                "name": "pitwall_windows",
+                "description": (
+                    "Tyre windows: laps each set can still do, the last lap to change it, and every "
+                    "car that cannot reach the flag on what it is on. Most exposed first."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "description": "Rows to show (default 12)."}},
+                },
+            },
+            _windows,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_outlook",
+            {
+                "name": "pitwall_outlook",
+                "description": (
+                    "Likely outcome: the projected finishing order if everyone runs clean from here, "
+                    "each car on its current tyres with any mandatory stop priced in, and the places "
+                    "it expects to change."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pit_loss": {"type": "number", "description": "Seconds a stop costs (default 21.0)."},
+                        "limit": {"type": "integer", "description": "Rows to show (default 10)."},
+                    },
+                },
+            },
+            _outlook,
+            RACE,
+        ),
+        ToolSpec(
+            "pitwall_radio",
+            {
+                "name": "pitwall_radio",
+                "description": (
+                    "Driver radio as text: MultiViewer's published transcription of every team-radio "
+                    "clip, newest last, quoted with the time it was said and the driver who said it. "
+                    "Cut at the playhead, so a replay never shows radio from laps it has not reached. "
+                    "Filter with driver= to follow one car."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "driver": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {"type": "array", "items": {"type": "string"}},
+                            ],
+                            "description": (
+                                "One car or several: a code (NOR), a number (3), a list, or a "
+                                "comma-separated string (\"NOR, HAM\"). Omit for every driver."
+                            ),
+                        },
+                        "limit": {"type": "integer", "description": "Lines to show, newest (default 6). In summary mode, drivers to show."},
+                        "summary": {
+                            "type": "boolean",
+                            "description": (
+                                "Per-driver digest over a lap window instead of a plain list: "
+                                "who spoke, how often, and what they said. Selecting and counting "
+                                "only -- the wording is yours to write."
+                            ),
+                        },
+                        "laps": {"type": "integer", "description": "Summary window in laps, current lap included (default 4)."},
+                        "fresh": _FRESH,
+                    },
+                },
+            },
+            _radio,
         ),
         ToolSpec(
             "pitwall_driver",
